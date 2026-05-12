@@ -16,6 +16,7 @@ export function build(state) {
     autocomplete: 'off',
     autocorrect: 'off',
     rows: 1,
+    'aria-label': 'Search query',
     placeholder: 'search (auto-detects /regex/ and timestamp HH:MM:SS-HH:MM:SS)',
   });
   inputEl.addEventListener('input', () => listeners.onInput?.(inputEl.value));
@@ -38,10 +39,10 @@ export function build(state) {
     }
   });
 
-  goBtnEl = el('button', { type: 'button', onClick: () => listeners.onSubmit?.() }, 'Go');
-  prevBtnEl = el('button', { type: 'button', title: 'Previous', onClick: () => listeners.onPrev?.() }, '<');
-  nextBtnEl = el('button', { type: 'button', title: 'Next', onClick: () => listeners.onNext?.() }, '>');
-  summaryEl = el('div', { class: 'ss-summary' }, el('span', { class: 'ss-counter' }, '-'));
+  goBtnEl = el('button', { type: 'button', 'aria-label': 'Run search', onClick: () => listeners.onSubmit?.() }, 'Go');
+  prevBtnEl = el('button', { type: 'button', title: 'Previous match', 'aria-label': 'Previous match', onClick: () => listeners.onPrev?.() }, '<');
+  nextBtnEl = el('button', { type: 'button', title: 'Next match', 'aria-label': 'Next match', onClick: () => listeners.onNext?.() }, '>');
+  summaryEl = el('div', { class: 'ss-summary', role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true' }, el('span', { class: 'ss-counter' }, '-'));
 
   const row = el('div', { class: 'ss-input-row' },
     inputEl,

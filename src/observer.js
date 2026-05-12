@@ -53,6 +53,14 @@ export function start(opts = {}) {
   // Defensive: stop any prior instance before starting a new one so repeated
   // start() calls don't leak observers or settle intervals.
   stop();
+  // Reset module state so a second start() doesn't inherit autopause / settle
+  // flags from a previous session.
+  autoPaused = false;
+  lastPauseAt = 0;
+  recentTriggers = [];
+  isSettled = false;
+  mutationsThisWindow = 0;
+
   visibilityGet = opts.visibilityGet || (() => true);
   queryGet = opts.queryGet || (() => '');
   liveGet = opts.liveGet || (() => true);

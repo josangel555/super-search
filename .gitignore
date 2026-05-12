@@ -3,6 +3,8 @@ node_modules/
 *.log
 super-search.user.js
 super-search.user.js.map
+super-search.dev.user.js
+super-search.dev.user.js.map
 test/fixtures/large.html
 .bun-cache/
 coverage/

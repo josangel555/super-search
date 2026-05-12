@@ -195,9 +195,14 @@ export function buildUI(shadow, root) {
 
   listView.setListeners({
     onRowClick(m, i, isHistorical) {
-      // For current-page rows, scroll. For cross-page, just inform.
-      if (m.sourceUrl && m.sourceUrl !== sanitisedUrl(location.href)) {
-        log.info('Match is on a different page: ' + m.sourceUrl);
+      // Compare sanitised forms on both sides — current-search matches carry
+      // full sourceUrl (location.href) but historical matches were sanitised
+      // at append-time. Without canonicalising both we'd always reject rows
+      // on URLs that have a query string or hash.
+      const here = sanitisedUrl(location.href);
+      const there = sanitisedUrl(m.sourceUrl);
+      if (there && there !== here) {
+        log.info('Match is on a different page: ' + there);
         return;
       }
       if (!isHistorical) {

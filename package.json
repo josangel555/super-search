@@ -11,7 +11,7 @@
     "test": "bun test test/unit test/integration",
     "test:unit": "bun test test/unit",
     "test:integration": "bun test test/integration",
-    "test:e2e": "node build.mjs --dev && node test/e2e/runner.mjs",
+    "test:e2e": "node build.mjs --dev && cp super-search.dev.user.js super-search.user.js && node test/e2e/runner.mjs",
     "test:perf": "node test/perf/runner.mjs",
     "test:all": "npm run test && npm run test:e2e"
   },

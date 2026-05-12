@@ -36,8 +36,11 @@ export function installStyles() {
   if (typeof document === 'undefined') return;
   if (styleElRef && styleElRef.isConnected) return;
   const style = document.createElement('style');
+  // Background colours chosen to pass WCAG AA (>= 4.5:1) against black text:
+  // - all matches: #C04AC0 (medium orchid) ≈ 5.1:1
+  // - active match: #32CD32 (lime green) ≈ 9.0:1
   style.textContent = `
-    ::highlight(${ALL_NAME})    { background-color: #DA70D6; color: #000; }
+    ::highlight(${ALL_NAME})    { background-color: #C04AC0; color: #000; }
     ::highlight(${ACTIVE_NAME}) { background-color: #32CD32; color: #000; }
   `;
   (document.head || document.documentElement).appendChild(style);

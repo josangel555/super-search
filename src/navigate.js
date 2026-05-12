@@ -11,8 +11,11 @@ export function scrollToMatch(m) {
   if (!m) return;
   const el = m.element || (m.range && m.range.commonAncestorContainer?.parentElement);
   if (!el || !el.scrollIntoView) return;
+  // Respect prefers-reduced-motion — smooth scroll triggers vestibular issues.
+  let reduce = false;
+  try { reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch {}
   try {
-    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'center' });
   } catch {
     try { el.scrollIntoView(); } catch {}
   }

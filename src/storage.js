@@ -134,6 +134,7 @@ export function init() {
 
 export function teardown() {
   try { bc?.close?.(); } catch {}
+  bc = null;
   for (const h of pollHandles) safe.clearInterval(h);
   pollHandles = [];
 }

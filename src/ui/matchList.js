@@ -7,9 +7,14 @@ let headerEl = null;
 let listeners = {};
 
 export function build() {
-  listEl = el('ul', { class: 'ss-list' });
-  headerEl = el('div', { class: 'ss-list-header' }, 'Found Matches', el('span', { class: 'ss-collapse' }, '▾'));
-  headerEl.addEventListener('click', () => listeners.onToggleCollapse?.());
+  listEl = el('ul', { class: 'ss-list', role: 'list' });
+  headerEl = el('button', {
+    type: 'button',
+    class: 'ss-list-header',
+    'aria-expanded': 'true',
+    'aria-label': 'Toggle match list',
+    onClick: () => listeners.onToggleCollapse?.(),
+  }, 'Found Matches', el('span', { class: 'ss-collapse' }, '▾'));
   regionEl = el('div', { class: 'ss-list-region' }, headerEl, listEl);
   return regionEl;
 }
@@ -37,9 +42,20 @@ export function syncFromState(s, opts = {}) {
   for (let i = 0; i < rendered.length; i++) {
     const m = rendered[i];
     const isActive = !s.append && i === s.activeIndex;
+    const activate = () => listeners.onRowClick?.(m, i, s.append);
     const li = el('li', {
       class: isActive ? 'ss-active' : '',
-      onClick: () => listeners.onRowClick?.(m, i, s.append),
+      tabindex: '0',
+      role: 'button',
+      'aria-label': `Match ${i + 1}: ${m.value || ''}`,
+      'aria-current': isActive ? 'true' : null,
+      onClick: activate,
+      onKeydown: (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          activate();
+        }
+      },
     },
       el('span', { class: 'ss-row-num' }, String(i + 1) + '.'),
       el('span', { class: 'ss-row-text' },

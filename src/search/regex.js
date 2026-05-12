@@ -50,7 +50,10 @@ export function run(input, root, opts = {}) {
   try {
     if (input instanceof RegExp) {
       if (looksDangerous(input.source)) throw new RegexParseError('Pattern may cause catastrophic backtracking; refusing.');
-      re = new RegExp(input.source, input.flags.includes('g') ? input.flags : input.flags + 'g');
+      const f = input.flags;
+      // Match parseRegexLiteral semantics: only add `g` if neither `g` nor `y` is present.
+      const flags = (f.includes('g') || f.includes('y')) ? f : f + 'g';
+      re = new RegExp(input.source, flags);
     } else {
       re = parseRegexLiteral(input);
     }
