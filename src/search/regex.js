@@ -7,17 +7,35 @@ import { buildContext } from '../util/contextSnippet.js';
 
 export class RegexParseError extends Error {}
 
+// Heuristic catastrophic-backtracking guard.
+// JS regex.exec is uninterruptible once it starts, so the only practical
+// defence is to refuse known-pathological patterns syntactically before
+// execution. This catches the classic forms:  (X+)+ (X*)+ (X+)* (X*)*
+// where the inner and outer both have unbounded quantifiers.
+const DANGEROUS = /\([^)]*[+*?][^)]*\)[+*]/;
+export function looksDangerous(pattern) {
+  return DANGEROUS.test(pattern);
+}
+
 export function parseRegexLiteral(s) {
   // Input is either "/pattern/flags" or a raw pattern (we ensure /g for iteration).
   try {
     const m = s.match(/^\/(.+)\/([gimsuy]*)$/s);
+    let pattern, flags;
     if (m) {
-      let flags = m[2] || '';
+      pattern = m[1];
+      flags = m[2] || '';
       if (!flags.includes('g')) flags += 'g';
-      return new RegExp(m[1], flags);
+    } else {
+      pattern = s;
+      flags = 'gi';
     }
-    return new RegExp(s, 'gi');
+    if (looksDangerous(pattern)) {
+      throw new RegexParseError('Pattern may cause catastrophic backtracking; refusing.');
+    }
+    return new RegExp(pattern, flags);
   } catch (e) {
+    if (e instanceof RegexParseError) throw e;
     throw new RegexParseError(e.message);
   }
 }
@@ -28,8 +46,14 @@ export function run(input, root, opts = {}) {
   const sourceUrl = opts.sourceUrl || (typeof location !== 'undefined' ? location.href : '');
   let re;
   try {
-    re = (input instanceof RegExp) ? new RegExp(input.source, input.flags.includes('g') ? input.flags : input.flags + 'g') : parseRegexLiteral(input);
+    if (input instanceof RegExp) {
+      if (looksDangerous(input.source)) throw new RegexParseError('Pattern may cause catastrophic backtracking; refusing.');
+      re = new RegExp(input.source, input.flags.includes('g') ? input.flags : input.flags + 'g');
+    } else {
+      re = parseRegexLiteral(input);
+    }
   } catch (e) {
+    if (e instanceof RegexParseError) throw e;
     throw new RegexParseError(e.message);
   }
 

@@ -1,0 +1,17 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>dynamic</title></head>
+<body>
+<div id="root"><p>initial lorem text</p></div>
+<script>
+  setTimeout(() => {
+    const p = document.createElement('p');
+    p.textContent = 'added lorem 1';
+    document.getElementById('root').appendChild(p);
+  }, 800);
+  setTimeout(() => {
+    const p = document.createElement('p');
+    p.textContent = 'added lorem 2';
+    document.getElementById('root').appendChild(p);
+  }, 2000);
+</script>
+</body></html>

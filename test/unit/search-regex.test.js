@@ -52,13 +52,25 @@ describe('regex search', () => {
     expect(elapsed).toBeLessThan(1000);
   });
 
-  it('hits the ReDoS time budget on catastrophic patterns', () => {
-    // a long string of 'a' followed by 'b' with (a+)+b will backtrack catastrophically
-    document.body.innerHTML = '<p>' + 'a'.repeat(30) + 'X</p>';
-    const start = Date.now();
-    const r = run('/(a+)+b/g', document.body);
-    const elapsed = Date.now() - start;
-    // Should bail within ~500ms + some slack
-    expect(elapsed).toBeLessThan(2000);
+  it('refuses catastrophic (X+)+ patterns up-front', () => {
+    document.body.innerHTML = '<p>aaa</p>';
+    expect(() => run('/(a+)+b/g', document.body)).toThrow(RegexParseError);
+  });
+
+  it('refuses (.+)+ patterns', () => {
+    document.body.innerHTML = '<p>aaa</p>';
+    expect(() => run('/(.+)+x/g', document.body)).toThrow(RegexParseError);
+  });
+
+  it('allows benign patterns with single quantifier', () => {
+    document.body.innerHTML = '<p>foo bar foo</p>';
+    const r = run('/foo/g', document.body);
+    expect(r.matches.length).toBe(2);
+  });
+
+  it('allows alternation without nested quantifiers', () => {
+    document.body.innerHTML = '<p>cat dog cat</p>';
+    const r = run('/(cat|dog)/g', document.body);
+    expect(r.matches.length).toBe(3);
   });
 });
