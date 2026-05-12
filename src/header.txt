@@ -1,0 +1,19 @@
+// ==UserScript==
+// @name         Super Search
+// @namespace    https://github.com/jos/RegExSearch
+// @version      {{VERSION}}
+// @description  {{DESCRIPTION}}
+// @author       Jos
+// @match        *://*/*
+// @icon         https://www.svgrepo.com/show/508005/search-alt-2.svg
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_deleteValue
+// @grant        GM_addValueChangeListener
+// @grant        GM_removeValueChangeListener
+// @grant        GM_registerMenuCommand
+// @grant        GM_log
+// @grant        unsafeWindow
+// @run-at       document-idle
+// @noframes
+// ==/UserScript==

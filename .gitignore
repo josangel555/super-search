@@ -1,0 +1,11 @@
+node_modules/
+.DS_Store
+*.log
+super-search.user.js
+super-search.user.js.map
+test/fixtures/large.html
+.bun-cache/
+coverage/
+.idea/
+.vscode/
+*.swp

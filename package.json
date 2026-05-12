@@ -1,0 +1,23 @@
+{
+  "name": "super-search",
+  "version": "0.1.0",
+  "description": "Ultra-compact page search (text, regex, timestamp, selectors, JS query) with live/manual search, persistent match list, cycling, and logging.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "build": "node build.mjs",
+    "build:watch": "node build.mjs --watch",
+    "build:dev": "node build.mjs --dev",
+    "test": "bun test test/unit test/integration",
+    "test:unit": "bun test test/unit",
+    "test:integration": "bun test test/integration",
+    "test:e2e": "node test/e2e/runner.mjs",
+    "test:perf": "node test/perf/runner.mjs",
+    "test:all": "npm run test && npm run test:e2e"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "happy-dom": "^15.11.7",
+    "puppeteer": "^24.0.0"
+  }
+}
