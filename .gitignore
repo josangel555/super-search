@@ -1,7 +1,6 @@
 node_modules/
 .DS_Store
 *.log
-super-search.user.js
 super-search.user.js.map
 super-search.dev.user.js
 super-search.dev.user.js.map
