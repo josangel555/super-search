@@ -6,7 +6,8 @@ import * as state from '../../src/state.js';
 describe('search pipeline', () => {
   beforeEach(async () => {
     state.reset();
-    delete globalThis[Symbol.for('super-search.loaded')];
+    const { __resetSentinel } = await import('../../src/sentinel.js');
+    __resetSentinel();
     document.body.innerHTML = '<p>Lorem ipsum dolor sit amet, consectetur adipiscing elit.</p><p>More lorem here.</p>';
     // Remove any panel left from previous tests.
     for (const n of document.documentElement.querySelectorAll('div[id^="ss-"]')) n.remove();

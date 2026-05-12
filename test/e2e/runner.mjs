@@ -131,6 +131,60 @@ async function main() {
       assert.equal(ok, true);
       await page.close();
     });
+
+    console.log('# adversarial / pipeline tests using __SS_TEST__ dev hook');
+
+    await test('hostile page overriding MutationObserver and Array.from still boots and searches', async () => {
+      const page = await openFixture(browser, 'hostile-mo.html');
+      const result = await page.evaluate(async () => {
+        const t = window.__SS_TEST__;
+        if (!t) return { err: 'no __SS_TEST__ hook (was bundle built with --dev?)' };
+        await t.fireInput('alpha');
+        return { err: null, matches: t.state.get().matches.length };
+      });
+      assert.equal(result.err, null);
+      // hostile-mo.html has 4 occurrences of "alpha" (alpha-beta-alpha, gamma-alpha, delta-alpha).
+      assert.equal(result.matches, 4);
+      await page.close();
+    });
+
+    await test('hostile CSS does not affect panel host element position/zIndex', async () => {
+      const page = await openFixture(browser, 'hostile-css.html');
+      const cs = await page.evaluate(() => {
+        const host = document.documentElement.querySelector('div[id^="ss-"]');
+        const s = getComputedStyle(host);
+        return { position: s.position, zIndex: parseInt(s.zIndex, 10), display: s.display };
+      });
+      assert.equal(cs.position, 'fixed');
+      assert.ok(cs.zIndex >= 2147483000, 'expected very high z-index, got ' + cs.zIndex);
+      assert.notEqual(cs.display, 'none');
+      await page.close();
+    });
+
+    await test('typing into the panel via test hook populates CSS.highlights', async () => {
+      const page = await openFixture(browser, 'basic.html');
+      const sizes = await page.evaluate(async () => {
+        const t = window.__SS_TEST__;
+        if (!t) return { err: 'no __SS_TEST__ hook' };
+        await t.fireInput('Lorem');
+        return {
+          err: null,
+          all: CSS.highlights.get('ss-all')?.size || 0,
+          active: CSS.highlights.get('ss-active')?.size || 0,
+        };
+      });
+      assert.equal(sizes.err, null);
+      assert.ok(sizes.all >= 1, 'expected ss-all highlights');
+      assert.equal(sizes.active, 1);
+      await page.close();
+    });
+
+    await test('sentinel key is not discoverable via Symbol.for', async () => {
+      const page = await openFixture(browser, 'basic.html');
+      const found = await page.evaluate(() => globalThis[Symbol.for('super-search.loaded')]);
+      assert.equal(found, undefined);
+      await page.close();
+    });
   } finally {
     await browser.close();
   }

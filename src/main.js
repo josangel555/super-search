@@ -45,15 +45,31 @@ function boot2() {
       historical: initial.historical || [],
       logEntries: initial.logEntries || [],
       ui: { ...state.get().ui, ...(initial.ui || {}) },
+      clearedAt: initial.clearedAt || 0,
       firstRun: !initial.firstRunDone,
     });
+    // Persist whitelist: only the cross-tab synced state, plus UI. Runtime
+    // fields (matches, lastJsResult) are intentionally excluded — they
+    // contain non-serialisable Range/Element references and would bloat
+    // every write.
     state.setPersistFn((s) => {
       storage.writeHistorical(s.historical || []);
       storage.writeLog(s.logEntries || []);
       storage.writeUi(s.ui || {});
+      // clearedAt is updated only via storage.clearAll() — no need to write here.
     });
     storage.listen(storage.KEY_HIST, (v) => state.mergeHistorical(v || []));
     storage.listen(storage.KEY_LOG, (v) => state.mergeLog(v || []));
+    storage.listen(storage.KEY_CLEAR, (v) => {
+      const ts = Number(v) || 0;
+      if (ts <= (state.get().clearedAt || 0)) return;
+      // Apply the remote tombstone: drop our local pre-clear entries.
+      state.set({ clearedAt: ts });
+      const local = state.get();
+      const filtered = (local.historical || []).filter(m => (m.capturedAt || 0) >= ts);
+      const filteredLog = (local.logEntries || []).filter(e => new Date(e.ts).getTime() >= ts);
+      state.set({ historical: filtered, logEntries: filteredLog });
+    });
   } catch (e) {
     log.error('storage init failed: ' + (e?.message || e));
     // Continue — script remains functional without persistence.
@@ -87,8 +103,18 @@ function boot2() {
     },
     onAbout: () => alert(menu.aboutText()),
     onClearAll: () => {
-      state.set({ matches: [], historical: [], logEntries: [], clearedAt: safe.dateNow(), activeIndex: 0 });
-      try { storage.clearAll(); } catch {}
+      const t = safe.dateNow();
+      state.set({
+        matches: [], historical: [], logEntries: [],
+        clearedAt: t, activeIndex: 0,
+        lastJsResult: undefined, lastJsResultPresent: false,
+        inputError: null, truncated: false,
+      });
+      // Write the tombstone IMMEDIATELY (storage.clearAll) before any
+      // in-flight observer-driven append can re-publish the old historical
+      // via the debounced state-persistence path.
+      try { storage.clearAll(t); } catch {}
+      try { state.flushPersist?.(); } catch {}
     },
     onToggleDiagnostics: () => {
       setDiagnostics(!isDiagnostics());
@@ -111,10 +137,53 @@ function boot2() {
   } catch (e) { log.warn('observer/nav start failed: ' + e.message); }
 
   // First-run UX: auto-open the panel so the user knows the script is loaded.
+  // Mark done BEFORE show — protects against tab-close mid-show double-opening.
   if (state.get().firstRun) {
+    try { storage.markFirstRunDone(); } catch {}
     panel.show();
     state.setDeep({ ui: { visible: true } });
-    try { storage.markFirstRunDone(); } catch {}
+    state.set({ firstRun: false });
+  } else if (state.get().ui?.visible) {
+    // Restore previous-session visibility — panel mounts hidden by default,
+    // and without this the persisted ui.visible flag is silently discarded.
+    panel.show();
+  }
+
+  // Install a test-only escape hatch so the E2E suite can pierce the closed
+  // shadow root. Gated by __SS_DEV__ (build-time define) so production
+  // bundles never expose it.
+  if (typeof __SS_DEV__ !== 'undefined' && __SS_DEV__) {
+    const w = (typeof unsafeWindow !== 'undefined' ? unsafeWindow : window);
+    const findInput = () => {
+      // The panel root is held by the panel module; query it from there.
+      const r = panel.rootEl();
+      return r ? r.querySelector('.ss-query') : null;
+    };
+    w.__SS_TEST__ = {
+      state, panel, observer, nav, storage,
+      // Drive the full pipeline through real DOM events so the production
+      // input handler, debounce, dispatcher, state.set, subscribers and
+      // setHighlights all run identically to a user interaction.
+      async fireInput(value) {
+        const ta = findInput();
+        if (!ta) throw new Error('panel input not available');
+        ta.value = String(value);
+        ta.dispatchEvent(new Event('input', { bubbles: true }));
+        // Allow Live-mode debounce (100ms) + a margin for the render pass.
+        await new Promise(r => setTimeout(r, 180));
+      },
+      async fireKey(key, opts = {}) {
+        const ta = findInput();
+        if (!ta) throw new Error('panel input not available');
+        ta.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, ...opts }));
+        await new Promise(r => setTimeout(r, 30));
+      },
+      setMode(m) { state.set({ mode: m }); },
+      toggle() { panel.toggle(); state.setDeep({ ui: { visible: panel.isVisible() } }); },
+    };
+    // Wire the bus + sentinel references for tests that want them.
+    import('./bus.js').then(b => { w.__SS_TEST__.bus = b; });
+    import('./sentinel.js').then(s => { w.__SS_TEST__.sentinel = s; });
   }
 
   log.info('booted v' + (typeof __SS_VERSION__ !== 'undefined' ? __SS_VERSION__ : 'dev'));

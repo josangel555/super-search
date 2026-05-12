@@ -4,6 +4,15 @@ import { safe } from './safe.js';
 
 const dedupeKeys = new Set();
 
+// Drop query string and hash so persisted logs don't capture auth tokens etc.
+function sanitiseUrl(url) {
+  if (!url) return '';
+  try {
+    const u = new URL(url);
+    return u.origin + u.pathname;
+  } catch { return String(url); }
+}
+
 export function buildLogEntry(match) {
   return {
     ts: new safe.Date().toISOString(),
@@ -11,7 +20,7 @@ export function buildLogEntry(match) {
     value: match.value,
     before: match.before || '',
     after: match.after || '',
-    sourceUrl: match.sourceUrl || '',
+    sourceUrl: sanitiseUrl(match.sourceUrl),
   };
 }
 

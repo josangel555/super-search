@@ -31,7 +31,14 @@ export function run(query, root, opts = {}) {
     throw new JsError(e?.message || String(e));
   }
 
-  return { ...classify(result, sourceUrl), lastJsResult: result };
+  // Wrap classify too: the result may have throwing getters / Proxy traps.
+  let classified;
+  try {
+    classified = classify(result, sourceUrl);
+  } catch (e) {
+    return { matches: [], truncated: false, nodesSeen: 0, lastJsResult: '<unrepresentable>' };
+  }
+  return { ...classified, lastJsResult: result };
 }
 
 function classify(result, sourceUrl) {
@@ -73,6 +80,10 @@ function classify(result, sourceUrl) {
 
   if (result == null) {
     pushString(String(result), 0);
+  } else if (typeof result === 'object' && typeof result.then === 'function') {
+    // Promise-like — we don't await. Surface this clearly instead of letting
+    // the user copy "[object Promise]" and wonder why.
+    pushString('<Promise — JS mode does not await; use a synchronous expression>', 0);
   } else if (typeof result === 'object' && result.nodeType === 1) {
     pushElem(result, 0);
   } else if (typeof result === 'object' && (result instanceof Array || isNodeListLike(result))) {

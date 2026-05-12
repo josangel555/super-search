@@ -8,20 +8,28 @@ import * as inputView from './ui/input.js';
 import * as controlsView from './ui/controls.js';
 import * as listView from './ui/matchList.js';
 import { dispatch } from './search/dispatcher.js';
-import { setMatches as setHighlights, install as installHl, installStyles as installHlStyles } from './highlight.js';
+import { setMatches as setHighlights, install as installHl, installStyles as installHlStyles, setActiveOnly } from './highlight.js';
 import { applyOutlines, restore as restoreOutlines } from './elementHighlight.js';
 import { nextIndex, prevIndex, scrollToMatch } from './navigate.js';
 import { gm } from './gm.js';
 import * as bus from './bus.js';
+import * as observer from './observer.js';
+import * as storage from './storage.js';
 import { pruneDead, adjustIndex } from './lifecycle.js';
 import * as logView from './ui/logView.js';
 import { logMatches } from './logging.js';
 import { isAllowedToPersist } from './privacy.js';
 import { debounce } from './util/debounce.js';
-import { el } from './dom.js';
 import { log } from './diag.js';
 
+// Track all subscriptions made by buildUI so we can tear them down if the
+// panel is ever rebuilt — prevents duplicate handlers firing N times.
+let teardown = null;
+
 export function buildUI(shadow, root) {
+  if (teardown) teardown();
+  const unsubs = [];
+
   const controls = controlsView.build();
   const inputBuilt = inputView.build(state);
   const list = listView.build();
@@ -40,51 +48,77 @@ export function buildUI(shadow, root) {
   const performSearch = (auto = false) => {
     const s = state.get();
     const result = dispatch({ query: s.query, mode: s.mode, root: document.body, sourceUrl: location.href });
-    state.set({
+
+    // Build the next patch in one batch to avoid 3-4 cascading re-renders
+    // per user keystroke.
+    const allowedPersist = isAllowedToPersist(s, location.href);
+    const patch = {
       matches: result.matches,
       activeIndex: 0,
       inputError: result.error,
       submode: result.submode,
       truncated: !!result.truncated,
-      lastJsResult: result.lastJsResult !== undefined ? result.lastJsResult : state.get().lastJsResult,
-    });
-    setHighlights(result.matches, 0);
-    applyOutlines(result.matches, 0);
-
-    // Append + logging are persistence-affecting ops; honour privacy gate.
-    const allowedPersist = isAllowedToPersist(state.get(), location.href);
-    if (state.get().append && allowedPersist) {
-      const next = mergeHistorical(state.get().historical, result.matches);
-      state.set({ historical: next });
+      jsErrorMessage: result.jsErrorMessage || null,
+    };
+    if (result.lastJsResult !== undefined) {
+      patch.lastJsResult = result.lastJsResult;
+      patch.lastJsResultPresent = true;
     }
-    if (state.get().log?.enabled && allowedPersist) {
+    if (s.append && allowedPersist) {
+      patch.historical = mergeHistoricalLocal(s.historical, result.matches);
+    }
+    if (s.log?.enabled && allowedPersist) {
       const entries = logMatches(result.matches);
       if (entries.length) {
-        const merged = [...(state.get().logEntries || []), ...entries];
-        if (state.get().log.con && typeof console !== 'undefined') {
+        patch.logEntries = [...(s.logEntries || []), ...entries].slice(-1000);
+        if (s.log.con && typeof console !== 'undefined') {
           for (const e of entries) console.log('[super-search]', e);
         }
-        state.set({ logEntries: merged.slice(-1000) });
       }
     }
+    state.batch(() => state.set(patch));
+
+    setHighlights(result.matches, 0);
+    applyOutlines(result.matches, 0);
   };
 
   const liveSearch = debounce(100, () => performSearch(true));
+  const maybeLive = () => {
+    const s = state.get();
+    // Live-mode auto-search runs for text/selector only; JS mode is always
+    // manual to avoid eval'ing half-typed expressions.
+    if (s.live && s.mode !== 'js' && s.query) liveSearch();
+  };
+
+  const navigateTo = (idx) => {
+    const s = state.get();
+    if (s.matches.length === 0) return;
+    state.set({ activeIndex: idx });
+    setActiveOnly(s.matches, idx);
+    applyOutlines(s.matches, idx);
+    scrollToMatch(s.matches[idx]);
+  };
 
   inputView.setListeners({
     onInput(v) {
-      state.set({ query: v });
-      if (state.get().live) liveSearch();
+      const next = { query: v };
+      // Empty query: clear stale error / matches / outlines so the UI doesn't
+      // remain stuck in a red-border state after the user deletes their input.
+      if (!v) {
+        next.matches = [];
+        next.activeIndex = 0;
+        next.inputError = null;
+        next.truncated = false;
+        setHighlights([], 0);
+        restoreOutlines();
+      }
+      state.set(next);
+      maybeLive();
     },
     onSubmit() {
       const s = state.get();
       if (s.matches.length > 0) {
-        // Enter cycles to next.
-        const ni = nextIndex(s.activeIndex, s.matches.length);
-        state.set({ activeIndex: ni });
-        setHighlights(s.matches, ni);
-        applyOutlines(s.matches, ni);
-        scrollToMatch(s.matches[ni]);
+        navigateTo(nextIndex(s.activeIndex, s.matches.length));
       } else {
         performSearch(false);
       }
@@ -92,56 +126,68 @@ export function buildUI(shadow, root) {
     onPrev() {
       const s = state.get();
       if (s.matches.length === 0) return;
-      const pi = prevIndex(s.activeIndex, s.matches.length);
-      state.set({ activeIndex: pi });
-      setHighlights(s.matches, pi);
-      applyOutlines(s.matches, pi);
-      scrollToMatch(s.matches[pi]);
+      navigateTo(prevIndex(s.activeIndex, s.matches.length));
     },
     onNext() {
       const s = state.get();
       if (s.matches.length === 0) return;
-      const ni = nextIndex(s.activeIndex, s.matches.length);
-      state.set({ activeIndex: ni });
-      setHighlights(s.matches, ni);
-      scrollToMatch(s.matches[ni]);
+      navigateTo(nextIndex(s.activeIndex, s.matches.length));
+    },
+    onEscape() {
+      panel.hide();
+      state.setDeep({ ui: { visible: false } });
     },
   });
 
   controlsView.setListeners({
     onMode(m) {
       state.set({ mode: m });
-      if (state.get().query && state.get().live) liveSearch();
+      maybeLive();
     },
     onToggle(flag, v) {
       if (flag === 'log') {
-        state.set({ log: { ...state.get().log, enabled: v } });
+        state.setDeep({ log: { enabled: v } });
       } else {
         state.set({ [flag]: v });
       }
-      if (state.get().query && state.get().live && (flag === 'live' && v)) liveSearch();
+      if (flag === 'live' && v) maybeLive();
     },
     onCopy() {
       const s = state.get();
       const items = s.append ? s.historical : s.matches;
-      const lines = items.map(m => `${m.before}${m.value}${m.after}\t${m.sourceUrl}`);
-      const txt = lines.join('\n');
-      copyToClipboard(txt);
+      if (!items || items.length === 0) {
+        log.info('Nothing to copy');
+        return;
+      }
+      const lines = items.map(m => `${m.before || ''}${m.value || ''}${m.after || ''}\t${m.sourceUrl || ''}`);
+      copyToClipboard(lines.join('\n'));
     },
     onClearAll() {
+      const t = safe.dateNow();
       state.set({
-        matches: [], activeIndex: 0, historical: [],
-        logEntries: [], clearedAt: safe.dateNow(),
+        matches: [],
+        activeIndex: 0,
+        historical: [],
+        logEntries: [],
+        clearedAt: t,
+        lastJsResult: undefined,
+        lastJsResultPresent: false,
+        inputError: null,
+        truncated: false,
       });
+      // Tombstone synchronously so other tabs drop their stale local entries.
+      try { storage.clearAll(t); } catch {}
+      try { state.flushPersist?.(); } catch {}
       setHighlights([], 0);
       restoreOutlines();
     },
     onDump() {
-      const r = state.get().lastJsResult;
-      if (r === undefined) return;
+      const s = state.get();
+      if (!s.lastJsResultPresent) return;
+      const r = s.lastJsResult;
       try {
-        if (gm.unsafeWindow) gm.unsafeWindow.superSearchResults = r;
-        else if (typeof window !== 'undefined') window.superSearchResults = r;
+        const w = gm.unsafeWindow || (typeof window !== 'undefined' ? window : null);
+        if (w) w.superSearchResults = r;
         log.info('Dumped to window.superSearchResults');
       } catch (e) { log.error('dump failed: ' + e.message); }
     },
@@ -150,82 +196,115 @@ export function buildUI(shadow, root) {
   listView.setListeners({
     onRowClick(m, i, isHistorical) {
       // For current-page rows, scroll. For cross-page, just inform.
-      if (m.sourceUrl && m.sourceUrl !== location.href) {
+      if (m.sourceUrl && m.sourceUrl !== sanitisedUrl(location.href)) {
         log.info('Match is on a different page: ' + m.sourceUrl);
         return;
       }
       if (!isHistorical) {
-        state.set({ activeIndex: i });
-        setHighlights(state.get().matches, i);
+        navigateTo(i);
+      } else {
+        scrollToMatch(m);
       }
-      scrollToMatch(m);
     },
     onToggleCollapse() {
       const s = state.get();
-      state.set({ ui: { ...s.ui, listCollapsed: !s.ui.listCollapsed } });
+      state.setDeep({ ui: { listCollapsed: !s.ui.listCollapsed } });
     },
   });
 
-  // Subscribe each view to state changes.
-  state.subscribe((s) => {
+  // Render subscriber.
+  const unsub1 = state.subscribe((s) => {
     inputView.syncFromState(s);
     controlsView.syncFromState(s);
     listView.syncFromState(s);
     logView.syncFromState(s);
   });
+  unsubs.push(unsub1);
+
+  // Lifecycle pruning subscriber: drops dead matches when DOM changes.
+  // Re-uses the batch() guard inside state.set so the recursive notify is
+  // coalesced rather than re-entered.
+  let lastPrunedRef = null;
+  const unsub2 = state.subscribe((s) => {
+    if (!s.matches || s.matches.length === 0) return;
+    if (s.matches === lastPrunedRef) return;       // skip on no-op renders (activeIndex changes etc.)
+    const live = pruneDead(s.matches);
+    if (live.length !== s.matches.length) {
+      lastPrunedRef = live;
+      const newIdx = adjustIndex(s.activeIndex, s.matches.length, live.length);
+      state.set({ matches: live, activeIndex: newIdx });
+      setHighlights(live, newIdx);
+    } else {
+      lastPrunedRef = s.matches;
+    }
+  });
+  unsubs.push(unsub2);
 
   // Initial paint.
   state.set({});
 
   // Bus events: observer + nav + settling drive re-search.
-  bus.on('dom-changed', () => {
+  unsubs.push(bus.on('dom-changed', () => {
     if (!state.get().live) return;
     performSearch(true);
-  });
-  bus.on('nav', () => {
-    // SPA navigation: drop current matches (likely stale), re-search if Live.
+  }));
+  unsubs.push(bus.on('nav', () => {
+    // SPA navigation: rebind observer (body may have been replaced), drop
+    // matches (stale ranges), re-search if Live.
+    observer.rebind();
     setHighlights([], 0);
     restoreOutlines();
     state.set({ matches: [], activeIndex: 0 });
-    if (state.get().live && state.get().query) performSearch(true);
-  });
-  bus.on('pagehide', () => {
+    if (state.get().live && state.get().query && state.get().mode !== 'js') {
+      performSearch(true);
+    }
+  }));
+  unsubs.push(bus.on('pagehide', () => {
     // Best-effort flush.
     state.flushPersist?.();
-  });
-  bus.on('dom-unsettled', () => state.set({ domSettled: false }));
-  bus.on('dom-settled', () => {
+  }));
+  unsubs.push(bus.on('dom-unsettled', () => state.set({ domSettled: false })));
+  unsubs.push(bus.on('dom-settled', () => {
     state.set({ domSettled: true });
     // Opportunistic re-run if we have a query — page may have grown more matches.
-    if (state.get().live && state.get().query) performSearch(true);
-  });
+    // Skip JS mode (manual only).
+    const s = state.get();
+    if (s.live && s.query && s.mode !== 'js') performSearch(true);
+  }));
+  unsubs.push(bus.on('observer-auto-paused', () => {
+    log.warn('Search auto-paused — page is mutating too rapidly. Will resume after 30s of quiet.');
+  }));
 
-  // Lifecycle pruning subscriber: drops dead matches before render.
-  state.subscribe((s) => {
-    if (!s.matches || s.matches.length === 0) return;
-    const live = pruneDead(s.matches);
-    if (live.length !== s.matches.length) {
-      const newIdx = adjustIndex(s.activeIndex, s.matches.length, live.length);
-      state.set({ matches: live, activeIndex: newIdx });
-      setHighlights(live, newIdx);
-    }
-  });
+  teardown = () => {
+    for (const u of unsubs) { try { u(); } catch {} }
+    teardown = null;
+  };
+
+  return { teardown };
 }
 
-function mergeHistorical(existing, fresh) {
-  const seen = new Set(existing.map(m => m.id));
-  const out = existing.slice();
+function mergeHistoricalLocal(existing, fresh) {
+  const seen = new Set((existing || []).map(m => m.id));
+  const out = (existing || []).slice();
   for (const m of fresh) {
     if (!seen.has(m.id)) {
-      // Strip non-serialisable Range objects for storage compatibility — but
-      // keep elements as live refs for in-tab clicks. Phase 3 will refine this.
-      out.push({ ...m, range: null, element: null });
+      // Strip non-serialisable Range objects for cross-tab/storage compatibility.
+      out.push({ ...m, range: null, element: null, sourceUrl: sanitisedUrl(m.sourceUrl || location.href) });
       seen.add(m.id);
     }
   }
   // FIFO cap at 1000.
   if (out.length > 1000) out.splice(0, out.length - 1000);
   return out;
+}
+
+// Drop query string and hash to avoid persisting tokens or session ids.
+function sanitisedUrl(url) {
+  if (!url) return '';
+  try {
+    const u = new URL(url);
+    return u.origin + u.pathname;
+  } catch { return String(url); }
 }
 
 function copyToClipboard(text) {
@@ -237,14 +316,17 @@ function copyToClipboard(text) {
 }
 
 function fallbackCopy(text) {
+  // Append inside documentElement (not body) so a page listener on
+  // `body.addEventListener('copy', ...)` can't intercept us.
   try {
     const ta = document.createElement('textarea');
     ta.value = text;
     ta.style.position = 'fixed';
     ta.style.opacity = '0';
-    document.body.appendChild(ta);
+    ta.style.pointerEvents = 'none';
+    document.documentElement.appendChild(ta);
     ta.select();
     document.execCommand?.('copy');
-    document.body.removeChild(ta);
+    document.documentElement.removeChild(ta);
   } catch { /* swallow */ }
 }

@@ -11,7 +11,8 @@ export function run(query, root, opts = {}) {
   if (!query) return { matches: [], truncated: false, nodesSeen: 0 };
 
   const needle = normaliseQuery(query).toLowerCase();
-  if (!needle) return { matches: [], truncated: false, nodesSeen: 0 };
+  // Refuse whitespace-only or empty needles — they'd match every space on the page.
+  if (!needle || needle.trim() === '') return { matches: [], truncated: false, nodesSeen: 0 };
 
   const matches = [];
   const w = walkTextNodes(root, opts);

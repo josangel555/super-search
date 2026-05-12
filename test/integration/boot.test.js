@@ -2,7 +2,8 @@ import { describe, it, expect } from 'bun:test';
 
 describe('boot smoke', () => {
   it('main.js mounts a panel inside a shadow root on documentElement', async () => {
-    delete globalThis[Symbol.for('super-search.loaded')];
+    const { __resetSentinel } = await import('../../src/sentinel.js');
+    __resetSentinel();
     await import('../../src/main.js');
 
     // The panel mounts a div with an id starting with 'ss-' on documentElement.

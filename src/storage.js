@@ -9,6 +9,7 @@ const SCHEMA_VERSION = 1;
 const KEY_HIST = `ss.historical.v${SCHEMA_VERSION}`;
 const KEY_LOG = `ss.log.v${SCHEMA_VERSION}`;
 const KEY_UI = `ss.ui.v${SCHEMA_VERSION}`;
+const KEY_CLEAR = `ss.clearedAt.v${SCHEMA_VERSION}`;
 const KEY_FIRSTRUN = 'ss.bootedOnce';
 
 const MAX_ENTRIES = 1000;
@@ -31,8 +32,10 @@ function readEnv(key, fallback) {
   return gmSafe(() => {
     const raw = gm.getValue(key, null);
     if (raw == null || raw === '') return { v: fallback, src: null, ts: 0 };
-    const parsed = (typeof raw === 'string') ? safe.jsonParse(raw) : raw;
-    if (parsed && Object.prototype.hasOwnProperty.call(parsed, 'v')) return parsed;
+    let parsed;
+    try { parsed = (typeof raw === 'string') ? safe.jsonParse(raw) : raw; }
+    catch { return { v: fallback, src: null, ts: 0 }; }
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && Object.prototype.hasOwnProperty.call(parsed, 'v')) return parsed;
     // Legacy/raw value — treat as the value directly.
     return { v: parsed, src: null, ts: 0 };
   }, { v: fallback, src: null, ts: 0 });
@@ -83,6 +86,9 @@ export function listen(key, fn) {
 }
 
 export function init() {
+  // Defensive: tear down any previous instance so test re-init (and any
+  // future module-rebind path in production) doesn't accumulate channels.
+  teardown();
   TAB_ID = makeTabId();
 
   // BroadcastChannel for fast intra-browser fan-out.
@@ -103,7 +109,7 @@ export function init() {
 
   // GM_addValueChangeListener — fires on cross-tab AND cloud-sync changes.
   if (gm.addValueChangeListener) {
-    for (const key of [KEY_HIST, KEY_LOG]) {
+    for (const key of [KEY_HIST, KEY_LOG, KEY_CLEAR]) {
       try {
         gm.addValueChangeListener(key, (_k, _old, neu, remote) => {
           if (!remote) return;
@@ -115,7 +121,7 @@ export function init() {
   } else if (!bc) {
     // No live signal available — poll every 2s as last-resort fallback.
     log.info('cross-tab sync degraded to polling');
-    for (const key of [KEY_HIST, KEY_LOG]) {
+    for (const key of [KEY_HIST, KEY_LOG, KEY_CLEAR]) {
       let last = safe.jsonStringify(read(key, null));
       const h = safe.setInterval(() => {
         const cur = safe.jsonStringify(read(key, null));
@@ -141,6 +147,7 @@ export function readAll() {
     historical: sanitiseArr(read(KEY_HIST, [])),
     logEntries: sanitiseArr(read(KEY_LOG, [])),
     ui: read(KEY_UI, {}),
+    clearedAt: Number(read(KEY_CLEAR, 0)) || 0,
     firstRunDone: !!read(KEY_FIRSTRUN, false),
   };
 }
@@ -150,10 +157,16 @@ function sanitiseArr(v) { return Array.isArray(v) ? v : []; }
 export function writeUi(uiState) { write(KEY_UI, uiState); }
 export function writeHistorical(arr) { write(KEY_HIST, capArray(arr)); }
 export function writeLog(arr) { write(KEY_LOG, capArray(arr)); }
+export function writeClearedAt(ts) { write(KEY_CLEAR, Number(ts) || 0); }
 export function markFirstRunDone() { write(KEY_FIRSTRUN, true); }
-export function clearAll() {
-  // Tombstone the cross-tab list: write empty + clearedAt timestamp embedded
-  // in the envelope's ts. Other tabs filter local in-memory entries by ts.
+export function clearAll(ts) {
+  // Tombstone the cross-tab list: write empty arrays AND broadcast a new
+  // clearedAt timestamp so other tabs can drop their in-memory pre-clear
+  // entries (otherwise the next mergeHistorical on Tab B reads the empty
+  // payload, unions it with B's local non-empty array, and resurrects the
+  // matches Tab A just cleared).
+  const t = Number(ts) || safe.dateNow();
+  write(KEY_CLEAR, t);
   write(KEY_HIST, []);
   write(KEY_LOG, []);
 }
@@ -188,4 +201,4 @@ export function mergeHistorical(local, remote, clearedAt = 0) {
   return out;
 }
 
-export { KEY_HIST, KEY_LOG, KEY_UI, KEY_FIRSTRUN, MAX_ENTRIES, MAX_BYTES };
+export { KEY_HIST, KEY_LOG, KEY_UI, KEY_CLEAR, KEY_FIRSTRUN, MAX_ENTRIES, MAX_BYTES };

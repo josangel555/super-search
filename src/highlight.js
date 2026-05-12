@@ -8,6 +8,7 @@ const ACTIVE_NAME = 'ss-active';
 let allHL = null;
 let activeHL = null;
 let installed = false;
+let styleElRef = null;     // closure-held reference; we don't rely on getElementById
 
 export function isAvailable() {
   return !!(safe.cssHighlights && safe.Highlight);
@@ -29,16 +30,18 @@ export function install() {
 
 export function installStyles() {
   // Highlights are styled at the document level (CSS pseudo-element selector
-  // can't be scoped to a shadow root). Append a <style> to <head>.
+  // can't be scoped to a shadow root). Append a <style> to documentElement.
+  // We retain a closure reference rather than relying on a known-id element,
+  // so host pages can't probe for us via getElementById.
   if (typeof document === 'undefined') return;
-  if (document.getElementById('ss-highlight-styles')) return;
+  if (styleElRef && styleElRef.isConnected) return;
   const style = document.createElement('style');
-  style.id = 'ss-highlight-styles';
   style.textContent = `
     ::highlight(${ALL_NAME})    { background-color: #DA70D6; color: #000; }
     ::highlight(${ACTIVE_NAME}) { background-color: #32CD32; color: #000; }
   `;
   (document.head || document.documentElement).appendChild(style);
+  styleElRef = style;
 }
 
 export function clear() {
@@ -54,10 +57,29 @@ export function setMatches(matches, activeIndex) {
   activeHL.clear();
   for (let i = 0; i < matches.length; i++) {
     const m = matches[i];
-    if (!m.range) continue;
+    if (!m || !m.range) continue;
     try {
       if (i === activeIndex) activeHL.add(m.range);
       else allHL.add(m.range);
     } catch { /* range may be detached */ }
+  }
+}
+
+// Move only the "active" range without rebuilding the full set.
+// Used by next/prev navigation — much cheaper than setMatches for big sets.
+export function setActiveOnly(matches, activeIndex) {
+  install();
+  if (!isAvailable() || !allHL || !activeHL) return;
+  // Move the previous active back into all, swap in the new active.
+  activeHL.clear();
+  // Re-derive: this is O(matches) but only touches the Highlight set, no Range allocations.
+  allHL.clear();
+  for (let i = 0; i < matches.length; i++) {
+    const m = matches[i];
+    if (!m || !m.range) continue;
+    try {
+      if (i === activeIndex) activeHL.add(m.range);
+      else allHL.add(m.range);
+    } catch { /* detached */ }
   }
 }

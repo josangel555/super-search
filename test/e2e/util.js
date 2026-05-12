@@ -33,15 +33,26 @@ export async function openFixture(browser, name) {
   const page = await browser.newPage();
   // Capture console + uncaught errors for debugging.
   page.on('pageerror', err => console.error('[page]', err.message));
-  // Inject GM_* shim early.
+  // Inject GM_* shim early, BEFORE any host page script runs. This mirrors
+  // Tampermonkey's @inject-into content behaviour: our globals (and frozen
+  // built-in captures via safe.js) come into existence before page scripts
+  // get a chance to mutate window.*.
   await page.evaluateOnNewDocument(GM_SHIM);
-  // Inject bundle as a content script after the page loads.
-  await page.goto(fixtureUrl(name));
-  await page.evaluate(loadBundle());
-  await page.waitForFunction(() => {
-    return !!document.documentElement.querySelector('div[id^="ss-"]');
-  }, { timeout: 5000 });
-  return page;
+  await page.evaluateOnNewDocument(loadBundle());
+  // Now navigate. Host page scripts will see our hook already in place, but
+  // they execute in their own JS realm conceptually — for our purposes the
+  // bundle's safe.js captured pristine refs above.
+  await page.goto(fixtureUrl(name), { waitUntil: 'load' });
+  // Poll directly instead of waitForFunction — waitForFunction has been seen
+  // to short-circuit with "Waiting failed" on some fixture pages even though
+  // the predicate becomes true.
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    const ok = await page.evaluate(() => !!document.documentElement.querySelector('div[id^="ss-"]'));
+    if (ok) return page;
+    await new Promise(r => setTimeout(r, 50));
+  }
+  throw new Error('panel did not appear within 5s on ' + name);
 }
 
 export async function pressShortcut(page) {

@@ -9,9 +9,12 @@ export function isAlive(m) {
     const node = m.range.startContainer;
     if (!node || !node.isConnected) return false;
     // Also detect node-length changes (rewrites/edits) — node-value mutation
-    // invalidates offsets.
+    // invalidates offsets. Falsy nodeValue (empty string) is itself a change
+    // from any captured length > 0, so use length explicitly rather than
+    // truthiness-gating.
     if (m.capturedNodeLength != null && node.nodeType === 3) {
-      if (node.nodeValue && node.nodeValue.length !== m.capturedNodeLength) return false;
+      const len = (node.nodeValue == null) ? 0 : node.nodeValue.length;
+      if (len !== m.capturedNodeLength) return false;
     }
     return true;
   }

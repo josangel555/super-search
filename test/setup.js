@@ -21,6 +21,7 @@ globalThis.getSelection = win.getSelection?.bind(win);
 // Storage backed by Map; simulates Tampermonkey GM_*.
 const store = new Map();
 const listeners = new Map(); // key -> Set of listener fns
+const menuCmds = new Map();
 
 globalThis.GM_getValue = (k, def) => store.has(k) ? store.get(k) : def;
 globalThis.GM_setValue = (k, v) => {
@@ -38,9 +39,29 @@ globalThis.GM_addValueChangeListener = (k, fn) => {
   return Symbol('listener');
 };
 globalThis.GM_removeValueChangeListener = (token) => { /* simplified */ };
-globalThis.GM_registerMenuCommand = (label, fn) => { /* no-op */ return 0; };
+globalThis.GM_registerMenuCommand = (label, fn) => {
+  menuCmds.set(label, fn);
+  return menuCmds.size;
+};
 globalThis.GM_log = (msg) => { /* console.log('[test]', msg); */ };
 globalThis.unsafeWindow = win;
+
+// Test helpers (only used from test files).
+globalThis.__gmFireRemote = (k, v) => {
+  // Simulate a remote (cross-tab/cloud-sync) change event.
+  const set = listeners.get(k);
+  const ser = typeof v === 'string' ? v : JSON.stringify(v);
+  const old = store.get(k);
+  store.set(k, ser);
+  if (set) for (const fn of set) {
+    try { fn(k, old, ser, /*remote*/ true); } catch {}
+  }
+};
+globalThis.__menuFire = (label) => {
+  const fn = menuCmds.get(label);
+  if (fn) fn();
+};
+globalThis.__menuList = () => [...menuCmds.keys()];
 
 // Minimal CSS.highlights stub so highlight.js can be imported without throw.
 if (typeof globalThis.CSS === 'undefined') globalThis.CSS = {};
@@ -85,6 +106,7 @@ if (typeof globalThis.BroadcastChannel === 'undefined') {
 globalThis.__resetGM = () => {
   store.clear();
   listeners.clear();
+  menuCmds.clear();
 };
 
 // Define __SS_VERSION__ / __SS_DEV__ that the build inlines but source uses typeof to read.

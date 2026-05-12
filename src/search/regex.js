@@ -25,7 +25,9 @@ export function parseRegexLiteral(s) {
     if (m) {
       pattern = m[1];
       flags = m[2] || '';
-      if (!flags.includes('g')) flags += 'g';
+      // `g` and `y` are mutually exclusive in some engines; if user wants
+      // sticky, respect it and rely on m.index advance for iteration.
+      if (!flags.includes('g') && !flags.includes('y')) flags += 'g';
     } else {
       pattern = s;
       flags = 'gi';

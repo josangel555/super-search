@@ -34,6 +34,8 @@ const initial = () => ({
 let state = initial();
 const subscribers = new Set();
 let persistFn = null;        // Set externally by storage layer
+let isNotifying = false;
+let pendingNotify = false;
 
 export function get() { return state; }
 
@@ -59,9 +61,41 @@ export function setDeep(patch) {
   if (persistFn) schedulePersist();
 }
 
+// Apply multiple changes as one notify. Used by hot paths (e.g. performSearch)
+// to avoid 3-4 cascading re-renders per user action.
+export function batch(fn) {
+  const before = isNotifying;
+  isNotifying = true;
+  try { fn(); }
+  finally {
+    isNotifying = before;
+    if (pendingNotify && !isNotifying) {
+      pendingNotify = false;
+      notify();
+    }
+  }
+}
+
 function notify() {
-  for (const fn of subscribers) {
-    try { fn(state); } catch { /* logged elsewhere */ }
+  if (isNotifying) {
+    // Re-entrant set inside a subscriber: defer to avoid mid-iteration mutation
+    // of the subscribers set and to avoid a second full pass with the new state.
+    pendingNotify = true;
+    return;
+  }
+  isNotifying = true;
+  try {
+    const snapshot = [...subscribers];
+    for (const fn of snapshot) {
+      try { fn(state); } catch { /* logged elsewhere */ }
+    }
+  } finally {
+    isNotifying = false;
+    if (pendingNotify) {
+      pendingNotify = false;
+      // One coalesced re-notify with latest state.
+      notify();
+    }
   }
 }
 

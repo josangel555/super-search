@@ -9,7 +9,11 @@ import { parseRange, timeToSeconds, TOKEN_RX } from '../util/timeParse.js';
 export function run(query, root, opts = {}) {
   const sourceUrl = opts.sourceUrl || (typeof location !== 'undefined' ? location.href : '');
   const range = parseRange(query);
-  if (!range || range.lo > range.hi) return { matches: [], truncated: false, nodesSeen: 0 };
+  if (!range) return { matches: [], truncated: false, nodesSeen: 0 };
+  if (range.lo > range.hi) {
+    // Inverted range — surface the issue rather than silently returning empty.
+    return { matches: [], truncated: false, nodesSeen: 0, error: 'inverted-range' };
+  }
 
   const matches = [];
   const w = walkTextNodes(root, opts);

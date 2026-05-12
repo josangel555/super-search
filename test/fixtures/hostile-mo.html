@@ -1,0 +1,13 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>hostile-mo</title>
+<script>
+  // Host JS overrides MutationObserver and Array.from BEFORE the bundle runs.
+  // The bundle should still boot and search should still work because safe.js
+  // captured frozen references at module-load time.
+  window.MutationObserver = function () { throw new Error('hostile MO'); };
+  window.MutationObserver.prototype = {};
+  Array.from = function () { throw new Error('hostile Array.from'); };
+</script>
+</head><body>
+<p>alpha beta alpha</p><p>gamma alpha</p><p>delta alpha</p>
+</body></html>

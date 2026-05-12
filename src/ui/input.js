@@ -7,7 +7,7 @@ let goBtnEl = null;
 let prevBtnEl = null;
 let nextBtnEl = null;
 let summaryEl = null;
-let listeners = { onInput: null, onSubmit: null, onPrev: null, onNext: null };
+let listeners = { onInput: null, onSubmit: null, onPrev: null, onNext: null, onEscape: null };
 
 export function build(state) {
   inputEl = el('textarea', {
@@ -20,6 +20,11 @@ export function build(state) {
   });
   inputEl.addEventListener('input', () => listeners.onInput?.(inputEl.value));
   inputEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      listeners.onEscape?.();
+      return;
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       if (state.get().mode === 'js' && !(e.ctrlKey || e.metaKey)) return;
       e.preventDefault();
@@ -51,13 +56,18 @@ export function setListeners(l) { Object.assign(listeners, l); }
 export function syncFromState(s) {
   if (!inputEl) return;
   if (inputEl.value !== s.query) inputEl.value = s.query;
+  const wasJsMode = inputEl.classList.contains('ss-mode-js');
   inputEl.classList.toggle('ss-mode-js', s.mode === 'js');
   inputEl.classList.toggle('ss-error', !!s.inputError);
   if (s.mode === 'js') {
     inputEl.removeAttribute('rows');
   } else {
     inputEl.rows = 1;
+    // Clear any inline height the user dragged onto the textarea in JS mode
+    // so switching back to text/selector returns to single-line.
+    if (wasJsMode) inputEl.style.height = '';
   }
+  // Show Go button when manual (live=false) OR in JS mode (always manual).
   goBtnEl.hidden = s.live && s.mode !== 'js';
 
   // Summary

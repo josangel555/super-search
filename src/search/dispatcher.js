@@ -30,7 +30,10 @@ export function detectTextSubmode(query) {
 }
 
 export function dispatch({ query, mode, root, sourceUrl }) {
-  if (!query) return { matches: [], error: null, submode: 'empty', truncated: false };
+  if (query == null || query === '') return { matches: [], error: null, submode: 'empty', truncated: false };
+  // Defensive: coerce non-string queries to string (numbers, booleans, etc.).
+  // Strict types here would bubble up as errors; in practice callers pass strings.
+  if (typeof query !== 'string') query = String(query);
   root = root || document.body;
   const ctx = { sourceUrl };
 

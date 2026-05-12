@@ -13,8 +13,8 @@
 // running NFC through the index-map machinery. The cost is a rare miss on
 // NFD-encoded text, not a crash.
 
-const ZW = /[​-‍﻿­]/;
-const SPACE_LIKE = /[   ⁠]/; // various non-breaking / narrow spaces
+const ZW = /[​-‍﻿­⁠⁡-⁤]/;
+const SPACE_LIKE = /[     ]/; // NBSP + narrow/figure/thin/hair spaces
 
 /**
  * Normalise a single node's text for matching.
