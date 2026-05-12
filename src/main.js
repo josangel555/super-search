@@ -7,6 +7,8 @@ import { log, isDiagnostics, setDiagnostics } from './diag.js';
 import * as panel from './ui/panel.js';
 import * as menu from './ui/menu.js';
 import { registerShortcut } from './shortcut.js';
+import * as state from './state.js';
+import { buildUI } from './wiring.js';
 
 function boot() {
   // 1. Sentinel — bail if another instance has loaded.
@@ -31,21 +33,35 @@ function boot() {
 }
 
 function boot2() {
+  let shadow;
   try {
-    panel.mount();
+    shadow = panel.mount();
   } catch (e) {
     log.error('panel mount failed: ' + (e?.message || e));
     return;
   }
 
-  registerShortcut({}, () => panel.toggle());
+  const rootEl = panel.rootEl();
+  try {
+    buildUI(shadow, rootEl);
+  } catch (e) {
+    log.error('UI wiring failed: ' + (e?.message || e));
+    return;
+  }
+
+  registerShortcut({}, () => {
+    panel.toggle();
+    state.setDeep({ ui: { visible: panel.isVisible() } });
+  });
 
   menu.register({
-    onToggle: () => panel.toggle(),
+    onToggle: () => {
+      panel.toggle();
+      state.setDeep({ ui: { visible: panel.isVisible() } });
+    },
     onAbout: () => alert(menu.aboutText()),
     onClearAll: () => {
-      // Phase 3 will wire up real storage clearing; placeholder for now.
-      log.info('Clear all (placeholder — wired in phase 3)');
+      state.set({ matches: [], historical: [], logEntries: [], clearedAt: safe.dateNow(), activeIndex: 0 });
     },
     onToggleDiagnostics: () => setDiagnostics(!isDiagnostics()),
   });
