@@ -1,0 +1,20 @@
+// Tiny event bus — used only for the observer→dispatcher seam.
+// Direct function calls everywhere else.
+const handlers = new Map();
+
+export function on(event, fn) {
+  if (!handlers.has(event)) handlers.set(event, new Set());
+  handlers.get(event).add(fn);
+  return () => handlers.get(event)?.delete(fn);
+}
+
+export function emit(event, payload) {
+  const set = handlers.get(event);
+  if (!set) return;
+  for (const fn of set) {
+    try { fn(payload); } catch { /* logged by caller */ }
+  }
+}
+
+export function off(event, fn) { handlers.get(event)?.delete(fn); }
+export function clear() { handlers.clear(); }

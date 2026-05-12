@@ -39,6 +39,11 @@ export function walkTextNodes(root, opts = {}) {
       // Skip rules apply to elements (and their subtrees).
       if (node.nodeType === 1) {
         if (SKIP_TAGS.has(node.tagName)) continue;
+        // Skip contenteditable subtrees — see RISKS.md C1/§3 deep dive:
+        // rich-text editors mutate around ranges, breaking offsets.
+        // Use both isContentEditable (real browsers) and getAttribute (more
+        // reliable in happy-dom / older engines).
+        if (isEditable(node)) continue;
         if (shouldSkip(node)) continue;
         // Push children in reverse so they pop in forward order.
         const children = node.childNodes;
@@ -68,3 +73,14 @@ export function walkTextNodes(root, opts = {}) {
 }
 
 export function isSkippableTag(tagName) { return SKIP_TAGS.has(tagName); }
+
+function isEditable(el) {
+  if (!el || el.nodeType !== 1) return false;
+  if (el.isContentEditable === true) return true;
+  const a = el.getAttribute && el.getAttribute('contenteditable');
+  if (a === 'true' || a === '') return true;
+  // Form fields effectively act like editable regions.
+  const tag = el.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA') return true;
+  return false;
+}

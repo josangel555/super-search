@@ -12,6 +12,8 @@ import { setMatches as setHighlights, install as installHl, installStyles as ins
 import { applyOutlines, restore as restoreOutlines } from './elementHighlight.js';
 import { nextIndex, prevIndex, scrollToMatch } from './navigate.js';
 import { gm } from './gm.js';
+import * as bus from './bus.js';
+import { pruneDead, adjustIndex } from './lifecycle.js';
 import { debounce } from './util/debounce.js';
 import { el } from './dom.js';
 import { log } from './diag.js';
@@ -155,6 +157,40 @@ export function buildUI(shadow, root) {
 
   // Initial paint.
   state.set({});
+
+  // Bus events: observer + nav + settling drive re-search.
+  bus.on('dom-changed', () => {
+    if (!state.get().live) return;
+    performSearch(true);
+  });
+  bus.on('nav', () => {
+    // SPA navigation: drop current matches (likely stale), re-search if Live.
+    setHighlights([], 0);
+    restoreOutlines();
+    state.set({ matches: [], activeIndex: 0 });
+    if (state.get().live && state.get().query) performSearch(true);
+  });
+  bus.on('pagehide', () => {
+    // Best-effort flush.
+    state.flushPersist?.();
+  });
+  bus.on('dom-unsettled', () => state.set({ domSettled: false }));
+  bus.on('dom-settled', () => {
+    state.set({ domSettled: true });
+    // Opportunistic re-run if we have a query — page may have grown more matches.
+    if (state.get().live && state.get().query) performSearch(true);
+  });
+
+  // Lifecycle pruning subscriber: drops dead matches before render.
+  state.subscribe((s) => {
+    if (!s.matches || s.matches.length === 0) return;
+    const live = pruneDead(s.matches);
+    if (live.length !== s.matches.length) {
+      const newIdx = adjustIndex(s.activeIndex, s.matches.length, live.length);
+      state.set({ matches: live, activeIndex: newIdx });
+      setHighlights(live, newIdx);
+    }
+  });
 }
 
 function mergeHistorical(existing, fresh) {

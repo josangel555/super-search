@@ -9,6 +9,8 @@ import * as menu from './ui/menu.js';
 import { registerShortcut } from './shortcut.js';
 import * as state from './state.js';
 import * as storage from './storage.js';
+import * as observer from './observer.js';
+import * as nav from './nav.js';
 import { buildUI } from './wiring.js';
 
 function boot() {
@@ -90,6 +92,16 @@ function boot2() {
     },
     onToggleDiagnostics: () => setDiagnostics(!isDiagnostics()),
   });
+
+  // Phase 4: observer + nav hooks.
+  try {
+    observer.start({
+      visibilityGet: () => panel.isVisible(),
+      queryGet: () => state.get().query,
+      liveGet: () => state.get().live,
+    });
+    nav.start();
+  } catch (e) { log.warn('observer/nav start failed: ' + e.message); }
 
   // First-run UX: auto-open the panel so the user knows the script is loaded.
   if (state.get().firstRun) {
