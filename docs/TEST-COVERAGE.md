@@ -1,19 +1,21 @@
 # Test Coverage — what's tested, what's not
 
-Snapshot of test inventory at end of build session. Companion to [TEST-PLAN.md](./TEST-PLAN.md) (which described what we *intended* to test) and [TEST-CASES.md](./TEST-CASES.md) (which enumerated cases by FR). This doc is the **honest reconciliation** between plan and reality.
+Snapshot of test inventory after the quality-push session (commits `5b02dc4` + `4daf5ee`). Companion to [TEST-PLAN.md](./TEST-PLAN.md) (intended coverage) and [TEST-CASES.md](./TEST-CASES.md) (cases by FR). This doc is the **honest reconciliation** between plan and reality.
 
 ## Numbers
 
 | Layer | Files | Tests | Status |
 |---|---|---|---|
-| Unit (bun + happy-dom) | 20 | 105 | all green |
-| Integration (bun + happy-dom) | 2 | 5 | all green |
-| E2E (puppeteer headless Chrome) | 1 runner | 10 scenarios | all green |
+| Unit (bun + happy-dom) | 20 | ~120 | all green |
+| Integration (bun + happy-dom) | 7 | ~38 | all green |
+| E2E (puppeteer headless Chrome) | 1 runner | 14 scenarios | all green |
 | Perf (happy-dom) | 1 runner | informational | runs |
 | Perf (real Chrome) | 1 runner | informational | runs |
 | Manual smoke | SMOKE.md | 8 sections | **not yet executed** |
 
-`bun test` reports 120 pass / 22 files — that includes a couple of multi-`it` groupings I'm counting as separate tests above.
+`bun test`: 158 pass / 27 files. `npm run test:e2e`: 14 / 14 pass. Bundle: 69.4 KB / 100 KB.
+
+Up from 130 tests total (start of quality push) to **172 tests total** (+42). Bundle down from 75.1 KB to 69.4 KB (DCE on `__SS_DEV__`-gated test hook).
 
 ---
 
@@ -327,34 +329,38 @@ We use the Tampermonkey API surface (`GM_addValueChangeListener` is Tampermonkey
 
 ---
 
-## Honest confidence rating
+## Honest confidence rating (revised after quality push)
 
-| Layer | Confidence | Why |
-|---|---|---|
-| Pure search functions (text/regex/timestamp/selector/jsquery) | **High** | Pure, well-tested, edge cases covered |
-| State store + persistence merge logic | **High** | Tested directly, mostly-pure |
-| `safe.js` defence | **Medium-high** | Core property tested; coverage in callers not enforced |
-| Highlight + element outline | **Medium** | Module-level tests pass; not asserted end-to-end |
-| UI wiring (state → views) | **Low** | Tested only via "doesn't crash" E2E |
-| Cross-tab sync | **Low-medium** | Merge function tested; plumbing untested |
-| Observer / nav / settling | **Low** | Module-level only, no integration verifying the cascade |
-| Adversarial-page handling | **Low** | Hostile-CSS fixture loads but we don't verify the panel renders correctly |
-| First-run UX, menu commands | **Very low** | Effectively untested |
-| Browser compat | **None** | Only Chrome 148 |
+| Layer | Confidence | Was | Why |
+|---|---|---|---|
+| Pure search functions (text/regex/timestamp/selector/jsquery) | **High** | High | Pure, well-tested, edge cases covered (+ ReDoS guard, sticky-flag handling, throwing-getter resilience) |
+| State store + persistence merge logic | **High** | High | Re-entry-safe notify + batch(); merge tested across tombstone scenarios |
+| `safe.js` defence | **High** | Med-high | Tested under real adversarial Chrome (E2E hostile-mo.html overrides MutationObserver + Array.from BEFORE bundle loads — bundle still boots and searches) |
+| Highlight + element outline | **Medium-high** | Medium | E2E asserts `CSS.highlights.get('ss-all').size` after live typing |
+| UI wiring (state → views) | **High** | Low | 8 wiring integration tests + 4 E2E pipeline tests via __SS_TEST__ hook |
+| Cross-tab sync | **High** | Low-med | 6 tests cover tombstone, union-by-id, no-self-echo, regression for clearedAt sync |
+| Observer / nav / settling | **Medium-high** | Low | 6 cascade tests + reset-on-restart tests |
+| Adversarial-page handling | **Medium-high** | Low | E2E asserts hostile-CSS layout invariants (position, z-index, display) AND hostile-MO survival |
+| First-run UX, menu commands | **High** | Very low | 6 menu+first-run integration tests cover all 5 menu commands + auto-open |
+| Accessibility | **Medium** | None | 6 a11y tests (radiogroup, roving tabindex, aria-current, live region, keyboard activation) |
+| Browser compat | **None** | None | Still only Chrome 148 |
 
 ---
 
-## What to add first if test budget were unlimited
+## Done during quality push
 
-In priority order:
+1. ✅ `__SS_TEST__` test hook gated by `__SS_DEV__` for E2E (`main.js`). Powers the new "fireInput / fireKey" E2E scenarios.
+2. ✅ Bundle-size assertion is now a hard fail (`build.mjs`).
+3. ✅ E2E coverage of hostile-CSS layout invariants and hostile-MO/Array.from survival.
 
-1. **Test hook for piercing the shadow root** in dev builds: expose `window.__SS_TEST__ = { state, dispatch, ... }` when `__SS_DEV__` is true. Unlocks ~10 critical E2E gaps (#1-#9).
-2. **Two-page cross-tab E2E** with a local HTTP fixture server. Closes gap #2.
-3. **MutationObserver-driven re-search E2E** once #1 is unlocked.
-4. **Perf assertion in CI** — fail build if 50k-node search > 200ms p95 in Chrome.
-5. **Bundle-size assertion** as a hard fail, not a warn.
-6. **safe.js grep lint** preventing direct `Array.from` / `MutationObserver` / etc. references outside `safe.js`.
-7. **Visual regression** via Puppeteer screenshots for at least the hostile-CSS case.
-8. **Run the SMOKE.md manual checklist** at least once. Most likely to surface a real bug.
+## Still to add (priority order)
 
-The cheapest thing of these is #8.
+1. **Two-page cross-tab E2E** with a local HTTP fixture server. Our integration tests cover the merge function exhaustively; the live-page wake-up via BroadcastChannel + storage event is still tested only in happy-dom.
+2. **MutationObserver-driven E2E re-search**: now possible via the `__SS_TEST__` hook (`window.__SS_TEST__.observer`). Currently only the integration-level cascade tests run.
+3. **Perf assertion in CI** — fail build if 50k-node search > 200 ms p95 in Chrome. Numbers are gathered today by `runner-chrome.mjs` but not enforced.
+4. **safe.js grep lint** preventing direct `Array.from` / `MutationObserver` / `JSON` / etc. references outside `safe.js`. The bundle survives `Array.from` tampering today (E2E hostile-mo proves it) but discipline can drift over time.
+5. **Visual regression** via Puppeteer screenshots for the hostile-CSS case.
+6. **Forced-colors mode visual check** — the CSS rules are in place but not visually verified.
+7. **Run the SMOKE.md manual checklist** against a real browser. Single highest-yield activity not yet performed.
+
+The cheapest thing of these is #7.
