@@ -14,6 +14,9 @@ import { nextIndex, prevIndex, scrollToMatch } from './navigate.js';
 import { gm } from './gm.js';
 import * as bus from './bus.js';
 import { pruneDead, adjustIndex } from './lifecycle.js';
+import * as logView from './ui/logView.js';
+import { logMatches } from './logging.js';
+import { isAllowedToPersist } from './privacy.js';
 import { debounce } from './util/debounce.js';
 import { el } from './dom.js';
 import { log } from './diag.js';
@@ -22,10 +25,12 @@ export function buildUI(shadow, root) {
   const controls = controlsView.build();
   const inputBuilt = inputView.build(state);
   const list = listView.build();
+  const logRegion = logView.build();
   root.appendChild(controls);
   root.appendChild(inputBuilt.row);
   root.appendChild(inputBuilt.summary);
   root.appendChild(list);
+  root.appendChild(logRegion);
 
   // Install document-level highlight styles (CSS pseudo-selector ::highlight
   // can't be scoped to a shadow root; needs to be in main document).
@@ -45,9 +50,22 @@ export function buildUI(shadow, root) {
     });
     setHighlights(result.matches, 0);
     applyOutlines(result.matches, 0);
-    if (state.get().append) {
+
+    // Append + logging are persistence-affecting ops; honour privacy gate.
+    const allowedPersist = isAllowedToPersist(state.get(), location.href);
+    if (state.get().append && allowedPersist) {
       const next = mergeHistorical(state.get().historical, result.matches);
       state.set({ historical: next });
+    }
+    if (state.get().log?.enabled && allowedPersist) {
+      const entries = logMatches(result.matches);
+      if (entries.length) {
+        const merged = [...(state.get().logEntries || []), ...entries];
+        if (state.get().log.con && typeof console !== 'undefined') {
+          for (const e of entries) console.log('[super-search]', e);
+        }
+        state.set({ logEntries: merged.slice(-1000) });
+      }
     }
   };
 
@@ -153,6 +171,7 @@ export function buildUI(shadow, root) {
     inputView.syncFromState(s);
     controlsView.syncFromState(s);
     listView.syncFromState(s);
+    logView.syncFromState(s);
   });
 
   // Initial paint.

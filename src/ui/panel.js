@@ -52,8 +52,21 @@ export function reattach() {
 export function show() {
   if (!root) return;
   root.hidden = false;
+  clampToViewport();
   const input = root.querySelector('.ss-query');
   if (input) input.focus();
+}
+
+function clampToViewport() {
+  if (!root || typeof window === 'undefined') return;
+  try {
+    const maxW = Math.floor(window.innerWidth * 0.85);
+    const maxH = Math.floor(window.innerHeight * 0.75);
+    const curW = parseInt(root.style.width || '', 10);
+    if (curW && curW > maxW) root.style.width = maxW + 'px';
+    const curH = parseInt(root.style.height || '', 10);
+    if (curH && curH > maxH) root.style.height = maxH + 'px';
+  } catch {}
 }
 
 export function hide() {

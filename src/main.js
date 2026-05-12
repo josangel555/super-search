@@ -90,7 +90,14 @@ function boot2() {
       state.set({ matches: [], historical: [], logEntries: [], clearedAt: safe.dateNow(), activeIndex: 0 });
       try { storage.clearAll(); } catch {}
     },
-    onToggleDiagnostics: () => setDiagnostics(!isDiagnostics()),
+    onToggleDiagnostics: () => {
+      setDiagnostics(!isDiagnostics());
+      log.info('diagnostics ' + (isDiagnostics() ? 'on' : 'off'));
+    },
+    onToggleIncognito: () => {
+      state.setDeep({ privacy: { incognito: !state.get().privacy?.incognito } });
+      log.info('incognito ' + (state.get().privacy?.incognito ? 'on' : 'off'));
+    },
   });
 
   // Phase 4: observer + nav hooks.

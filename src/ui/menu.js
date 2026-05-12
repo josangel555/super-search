@@ -5,14 +5,16 @@ import { gm } from '../gm.js';
 
 const registered = [];
 
-export function register({ onToggle, onAbout, onClearAll, onToggleDiagnostics }) {
+export function register(handlers) {
   if (!gm.registerMenuCommand) return;
+  const { onToggle, onAbout, onClearAll, onToggleDiagnostics, onToggleIncognito } = handlers;
 
   try {
-    registered.push(gm.registerMenuCommand('Super Search: Toggle panel', onToggle));
-    registered.push(gm.registerMenuCommand('Super Search: About', onAbout));
-    registered.push(gm.registerMenuCommand('Super Search: Clear all stored matches', onClearAll));
-    registered.push(gm.registerMenuCommand('Super Search: Toggle diagnostics', onToggleDiagnostics));
+    if (onToggle) registered.push(gm.registerMenuCommand('Super Search: Toggle panel', onToggle));
+    if (onAbout) registered.push(gm.registerMenuCommand('Super Search: About', onAbout));
+    if (onClearAll) registered.push(gm.registerMenuCommand('Super Search: Clear all stored matches', onClearAll));
+    if (onToggleDiagnostics) registered.push(gm.registerMenuCommand('Super Search: Toggle diagnostics', onToggleDiagnostics));
+    if (onToggleIncognito) registered.push(gm.registerMenuCommand('Super Search: Toggle incognito (no persistence)', onToggleIncognito));
   } catch (e) {
     gm.log('menu registration failed: ' + (e?.message || e));
   }

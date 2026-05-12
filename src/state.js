@@ -13,6 +13,7 @@ const initial = () => ({
   dedupe: false,
   log: { enabled: false, win: true, con: false },
   ui: { visible: false, width: 390, height: 'auto', listCollapsed: false },
+  privacy: { incognito: false, denylist: [] },
 
   // Cross-tab synced
   historical: [],
