@@ -2,6 +2,7 @@
 // persistence is debounced.
 import { safe } from './safe.js';
 import { debounce } from './util/debounce.js';
+import { mergeHistorical as mergeHistArr } from './storage.js';
 
 const initial = () => ({
   // UI / control flags (persisted per-tab)
@@ -89,4 +90,20 @@ export function flushPersist() {
     schedulePersist.cancel?.();
     persistFn(state);
   }
+}
+
+// Merge a remote `historical` payload into local state. Honours tombstones
+// (clearedAt) via the merge helper.
+export function mergeHistorical(remote) {
+  const cur = state.historical || [];
+  const merged = mergeHistArr(cur, remote || [], state.clearedAt || 0);
+  state = { ...state, historical: merged };
+  notify();
+}
+
+export function mergeLog(remote) {
+  const cur = state.logEntries || [];
+  const merged = mergeHistArr(cur, remote || [], state.clearedAt || 0);
+  state = { ...state, logEntries: merged };
+  notify();
 }

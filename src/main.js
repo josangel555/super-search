@@ -8,6 +8,7 @@ import * as panel from './ui/panel.js';
 import * as menu from './ui/menu.js';
 import { registerShortcut } from './shortcut.js';
 import * as state from './state.js';
+import * as storage from './storage.js';
 import { buildUI } from './wiring.js';
 
 function boot() {
@@ -33,6 +34,29 @@ function boot() {
 }
 
 function boot2() {
+  // Initialise storage + cross-tab plumbing first so initial state hydration
+  // and remote-change subscriptions are in place before the UI starts.
+  try {
+    storage.init();
+    const initial = storage.readAll();
+    state.hydrate({
+      historical: initial.historical || [],
+      logEntries: initial.logEntries || [],
+      ui: { ...state.get().ui, ...(initial.ui || {}) },
+      firstRun: !initial.firstRunDone,
+    });
+    state.setPersistFn((s) => {
+      storage.writeHistorical(s.historical || []);
+      storage.writeLog(s.logEntries || []);
+      storage.writeUi(s.ui || {});
+    });
+    storage.listen(storage.KEY_HIST, (v) => state.mergeHistorical(v || []));
+    storage.listen(storage.KEY_LOG, (v) => state.mergeLog(v || []));
+  } catch (e) {
+    log.error('storage init failed: ' + (e?.message || e));
+    // Continue — script remains functional without persistence.
+  }
+
   let shadow;
   try {
     shadow = panel.mount();
@@ -62,9 +86,17 @@ function boot2() {
     onAbout: () => alert(menu.aboutText()),
     onClearAll: () => {
       state.set({ matches: [], historical: [], logEntries: [], clearedAt: safe.dateNow(), activeIndex: 0 });
+      try { storage.clearAll(); } catch {}
     },
     onToggleDiagnostics: () => setDiagnostics(!isDiagnostics()),
   });
+
+  // First-run UX: auto-open the panel so the user knows the script is loaded.
+  if (state.get().firstRun) {
+    panel.show();
+    state.setDeep({ ui: { visible: true } });
+    try { storage.markFirstRunDone(); } catch {}
+  }
 
   log.info('booted v' + (typeof __SS_VERSION__ !== 'undefined' ? __SS_VERSION__ : 'dev'));
 }
