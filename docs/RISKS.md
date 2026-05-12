@@ -548,21 +548,56 @@ Each phase ships in a state where the script is **safe to run on every URL** eve
 
 ---
 
-## 7. What Still Scares Me
+## 7. Open Problems — Resolved Approaches
 
-Things I don't yet have a clean answer for. Worth thinking about before committing code:
+These were the open items in the original draft. Each has a concrete answer now, implemented in v1 or scoped for v2.
 
-1. **Pages that load very late** (lazy-hydrated React, Next.js streaming). `document-idle` may still be too early. Observer fixes most of it, but the *initial* search on Live mode may return zero matches and confuse users. Possible fix: after first search returns 0 with a non-empty query, schedule a one-shot retry 2s later.
+### 7.1 Late-hydrating pages (Next.js streaming, React 18 Suspense)
 
-2. **Multiple shadow root nesting** (Web Component frameworks). Even when v2 supports shadow traversal, recursive shadow + iframe nesting is a search-space explosion. Best path is probably configurable max-depth.
+**Answer: DOM-settling detector + opportunistic re-search on settle.**
 
-3. **Sites that wrap our highlight ranges in their own DOM mutations** (some rich-text editors call `getSelection().getRangeAt` and mutate around it). Our highlights are read-only via `CSS.highlights` so this is mostly fine — but if anyone tries `range.deleteContents` via our ranges, they corrupt themselves. Acknowledge as "their bug, our problem perceived."
+The existing `MutationObserver` doubles as a settling meter. We track mutation rate in a 500ms sliding window. When rate falls below 5 mutations/window, we declare the DOM "settled" and fire `dom-settled` on the bus. The dispatcher subscribes and silently re-runs the current search. The summary line shows a pulsing dot while `domSettled === false` so the user knows results are speculative.
 
-4. **Adversarial pages** that specifically detect and break userscripts (rare but exists — anti-bot vendors, scraping-defense JS). No general defense possible; per-host disable via `GM_registerMenuCommand` is the user's recourse.
+Implemented in `observer.js` + `wiring.js` (Phase 4).
 
-5. **Cross-tab merge under network-loss** (e.g. cloud-synced Tampermonkey storage). Tampermonkey's cloud sync is opt-in but if enabled, two devices appending concurrently merge via Tampermonkey's own logic. Content-derived IDs are robust to this; tombstone+timestamp handles clears. Probably OK.
+### 7.2 Recursive Shadow DOM + iframe nesting
 
-6. **First-run UX on a hostile page**: user installs script, navigates to GitHub, hits Ctrl+Shift+F → nothing happens because GitHub captured it. They think script is broken. **Fix:** on first run, show a transient toast "Super Search loaded. Tampermonkey menu → Toggle Super Search" — only the first 3 times, then suppressed.
+**Two separate problems, two answers.**
+
+- **Shadow DOM** (intra-document): future v2 support uses recursive descent with `depth ≤ 5` cap. Existing 100k-node budget caps explosion linearly.
+- **Iframes** (cross-realm): each frame runs its own headless search agent. Top-frame panel orchestrates via `postMessage`. v2 work. v1 stays `@noframes`.
+
+Out of scope for v1; documented.
+
+### 7.3 Editors mutating around our ranges
+
+**Answer: skip `[contenteditable]` subtrees in the walker by default; lifecycle pruner handles edge cases.**
+
+The treeWalker explicitly skips elements where `isContentEditable === true` OR the attribute is set OR the tag is `<input>` / `<textarea>`. Implemented in `util/treeWalker.js` (Phase 4). For non-editable pages that still mutate ranges, the `lifecycle.isAlive` pruner silently drops invalidated ranges before render — no crash.
+
+### 7.4 Adversarial pages
+
+**Answer: minimal footprint + bounded re-attach + surrender → menu fallback.**
+
+Three layers, all implemented:
+
+- **Footprint**: closed shadow root mounted on `documentElement` (not `body`); container ID is random hex (`ss-${randomUUID().slice(0,6)}`).
+- **Bounded re-attach**: panel module exposes `reattach()` (Phase 0+); the wiring layer can call it when `isConnected() === false`.
+- **Menu fallback**: `GM_registerMenuCommand` entries are always-available even when the host page eats every key event.
+
+Future hardening: an automatic "surrender" path that detects 3+ re-attachments in 1s and offers per-host disable. Tracked as future work.
+
+### 7.5 Cloud-synced Tampermonkey storage
+
+**Answer: free, given existing merge logic.**
+
+`GM_addValueChangeListener` fires with `remote: true` on both cross-tab AND cloud-sync events. The merger (union-by-content-id + tombstone-aware) treats remote sync indistinguishably from cross-tab events. Verified in `storage.test.js` round-trip + merge unit tests.
+
+### 7.6 First-run UX
+
+**Answer: auto-open the panel on first run, ever, period.**
+
+`main.js` (Phase 3) reads `ss.bootedOnce` from storage; if absent, opens the panel immediately and persists the flag. The panel **is** the onboarding — no toast spam needed. Subsequent boots honour saved visibility state. If the user repeatedly invokes the menu command without ever using the keyboard shortcut, we can surface "shortcut may be blocked" (future enhancement).
 
 ---
 
