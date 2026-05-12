@@ -3,14 +3,19 @@
 // Phase 1: text + regex. Phase 2 will register selector/js/timestamp strategies.
 import { run as runText } from './text.js';
 import { run as runRegex, RegexParseError } from './regex.js';
+import { run as runTimestamp } from './timestamp.js';
+import { run as runSelector, SelectorError } from './selector.js';
+import { run as runJs, JsError } from './jsquery.js';
 
 const RX_REGEX = /^\/(.+)\/([gimsuy]*)$/s;
 const RX_TIMESTAMP = /^\d{1,2}(:\d{2}){1,2}-\d{1,2}(:\d{2}){1,2}$/;
 
-// Strategy registry — Phase 2 will populate selector/js/timestamp.
 const strategies = {
   text: runText,
   regex: runRegex,
+  timestamp: runTimestamp,
+  selector: runSelector,
+  js: runJs,
 };
 
 export function registerStrategy(name, fn) {
@@ -55,6 +60,12 @@ export function dispatch({ query, mode, root, sourceUrl }) {
   } catch (e) {
     if (e instanceof RegexParseError) {
       return { matches: [], error: 'regex', submode: 'regex' };
+    }
+    if (e instanceof SelectorError) {
+      return { matches: [], error: 'selector', submode: 'selector' };
+    }
+    if (e instanceof JsError) {
+      return { matches: [], error: 'js', submode: 'js', jsErrorMessage: e.message };
     }
     return { matches: [], error: errorKind(mode), submode: mode };
   }

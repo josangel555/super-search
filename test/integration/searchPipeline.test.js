@@ -26,11 +26,12 @@ describe('search pipeline', () => {
     expect(r.matches.length).toBe(2);
   });
 
-  it('mode change to selector + a basic query (no strategy registered yet) returns []', async () => {
+  it('mode change to selector + a basic query', async () => {
     state.set({ mode: 'selector' });
     const { dispatch } = await import('../../src/search/dispatcher.js');
     const r = dispatch({ query: 'p', mode: 'selector', root: document.body });
-    // Phase 2 will register selector strategy. For now we expect a safe no-op.
-    expect(r.matches).toEqual([]);
+    // Two <p> elements in the fixture.
+    expect(r.matches.length).toBe(2);
+    expect(r.matches[0].kind).toBe('selector');
   });
 });

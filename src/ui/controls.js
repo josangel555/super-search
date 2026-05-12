@@ -3,7 +3,7 @@ import { el } from '../dom.js';
 
 let modeButtons = {};
 let liveCb = null, appendCb = null, dedupeCb = null, logCb = null;
-let copyBtn = null, clearBtn = null;
+let copyBtn = null, clearBtn = null, dumpBtn = null;
 let listeners = {};
 
 export function build() {
@@ -17,6 +17,7 @@ export function build() {
   logCb = el('input', { type: 'checkbox', onChange: (e) => listeners.onToggle?.('log', e.target.checked) });
 
   copyBtn = el('button', { type: 'button', onClick: () => listeners.onCopy?.() }, 'Copy');
+  dumpBtn = el('button', { type: 'button', hidden: true, onClick: () => listeners.onDump?.() }, 'Dump');
   clearBtn = el('button', { type: 'button', onClick: () => listeners.onClearAll?.() }, 'Clear');
 
   const modePicker = el('div', { class: 'ss-mode-picker' },
@@ -28,6 +29,7 @@ export function build() {
     el('label', {}, dedupeCb, 'Dedupe'),
     el('label', {}, logCb, 'Log'),
     copyBtn,
+    dumpBtn,
     clearBtn,
   );
 
@@ -46,4 +48,5 @@ export function syncFromState(s) {
   appendCb.checked = !!s.append;
   dedupeCb.checked = !!s.dedupe;
   logCb.checked = !!s.log?.enabled;
+  dumpBtn.hidden = !(s.mode === 'js' && s.lastJsResult !== undefined);
 }

@@ -9,7 +9,9 @@ import * as controlsView from './ui/controls.js';
 import * as listView from './ui/matchList.js';
 import { dispatch } from './search/dispatcher.js';
 import { setMatches as setHighlights, install as installHl, installStyles as installHlStyles } from './highlight.js';
+import { applyOutlines, restore as restoreOutlines } from './elementHighlight.js';
 import { nextIndex, prevIndex, scrollToMatch } from './navigate.js';
+import { gm } from './gm.js';
 import { debounce } from './util/debounce.js';
 import { el } from './dom.js';
 import { log } from './diag.js';
@@ -37,10 +39,10 @@ export function buildUI(shadow, root) {
       inputError: result.error,
       submode: result.submode,
       truncated: !!result.truncated,
-      lastJsResult: result.lastJsResult,
+      lastJsResult: result.lastJsResult !== undefined ? result.lastJsResult : state.get().lastJsResult,
     });
     setHighlights(result.matches, 0);
-    // Append mode: union into historical (Phase 3 will move this to storage layer).
+    applyOutlines(result.matches, 0);
     if (state.get().append) {
       const next = mergeHistorical(state.get().historical, result.matches);
       state.set({ historical: next });
@@ -61,6 +63,7 @@ export function buildUI(shadow, root) {
         const ni = nextIndex(s.activeIndex, s.matches.length);
         state.set({ activeIndex: ni });
         setHighlights(s.matches, ni);
+        applyOutlines(s.matches, ni);
         scrollToMatch(s.matches[ni]);
       } else {
         performSearch(false);
@@ -72,6 +75,7 @@ export function buildUI(shadow, root) {
       const pi = prevIndex(s.activeIndex, s.matches.length);
       state.set({ activeIndex: pi });
       setHighlights(s.matches, pi);
+      applyOutlines(s.matches, pi);
       scrollToMatch(s.matches[pi]);
     },
     onNext() {
@@ -110,6 +114,16 @@ export function buildUI(shadow, root) {
         logEntries: [], clearedAt: safe.dateNow(),
       });
       setHighlights([], 0);
+      restoreOutlines();
+    },
+    onDump() {
+      const r = state.get().lastJsResult;
+      if (r === undefined) return;
+      try {
+        if (gm.unsafeWindow) gm.unsafeWindow.superSearchResults = r;
+        else if (typeof window !== 'undefined') window.superSearchResults = r;
+        log.info('Dumped to window.superSearchResults');
+      } catch (e) { log.error('dump failed: ' + e.message); }
     },
   });
 
