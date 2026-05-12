@@ -13,10 +13,20 @@ export function build() {
     class: 'ss-list-header',
     'aria-expanded': 'true',
     'aria-label': 'Toggle match list',
+    title: 'Click to collapse / expand the match list',
     onClick: () => listeners.onToggleCollapse?.(),
   }, 'Found Matches', el('span', { class: 'ss-collapse' }, '▾'));
   regionEl = el('div', { class: 'ss-list-region' }, headerEl, listEl);
   return regionEl;
+}
+
+function urlBadgeText(url) {
+  try {
+    const u = new URL(url);
+    // Show host + first path segment so users can tell pages apart at a glance.
+    const seg = u.pathname.split('/').filter(Boolean)[0];
+    return seg ? `${u.host}/${seg}…` : u.host;
+  } catch { return String(url || '').slice(0, 30); }
 }
 
 export function setListeners(l) { listeners = l; }
@@ -26,15 +36,16 @@ export function syncFromState(s, opts = {}) {
   // If Append is on, render historical (the merged cross-tab list); otherwise current matches.
   const data = s.append ? (s.historical || []) : (s.matches || []);
   const shown = s.dedupe ? dedupe(data) : data;
+  const collapsed = !!s.ui?.listCollapsed;
 
   clear(listEl);
-  if (s.ui?.listCollapsed) {
-    regionEl.classList.add('ss-collapsed');
+  regionEl.classList.toggle('ss-collapsed', collapsed);
+  if (headerEl) headerEl.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+  if (collapsed) {
     listEl.style.display = 'none';
     return;
   }
   listEl.style.display = '';
-  regionEl.classList.remove('ss-collapsed');
 
   // Render rows. Limit DOM to ~500 visible rows for perf; rest counted in footer.
   const MAX_RENDERED = 500;
@@ -61,8 +72,13 @@ export function syncFromState(s, opts = {}) {
       el('span', { class: 'ss-row-text' },
         m.before, el('span', { class: 'ss-row-match' }, m.value), m.after),
     );
-    if (m.sourceUrl && m.sourceUrl !== (opts.currentUrl || location.href)) {
-      li.appendChild(el('span', { class: 'ss-row-url' }, hostOf(m.sourceUrl)));
+    if (m.sourceUrl) {
+      const here = canonicalUrl(opts.currentUrl || location.href);
+      const there = canonicalUrl(m.sourceUrl);
+      if (there && there !== here) {
+        const badge = el('span', { class: 'ss-row-url', title: 'from ' + m.sourceUrl }, urlBadgeText(m.sourceUrl));
+        li.appendChild(badge);
+      }
     }
     listEl.appendChild(li);
   }
@@ -71,8 +87,12 @@ export function syncFromState(s, opts = {}) {
   }
 }
 
-function hostOf(url) {
-  try { return new URL(url).host; } catch { return url.slice(0, 30); }
+function canonicalUrl(url) {
+  if (!url) return '';
+  try {
+    const u = new URL(url);
+    return u.origin + u.pathname;
+  } catch { return String(url); }
 }
 
 function dedupe(arr) {

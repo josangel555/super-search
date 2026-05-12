@@ -397,6 +397,12 @@
 
 .ss-log li { padding: 1px 0; list-style: none; }
 .ss-log li.ss-log-error { color: #d83b01; }
+.ss-log-ts { color: #888; }
+.ss-log-kind { color: #2a3a55; font-weight: bold; }
+.ss-log-ctx { color: #555; }
+.ss-log-match { background: #ffe066; padding: 0 2px; border-radius: 2px; }
+.ss-log-url { color: #607d8b; font-style: italic; }
+.ss-log-targets { display: inline-flex; gap: 4px; }
 
 .ss-first-run-banner {
   background: #fff4ce;
@@ -419,9 +425,89 @@
   font-size: 11px;
 }
 
+.ss-help-modal {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(15, 25, 45, 0.55);
+  z-index: 10;
+  display: flex;
+  align-items: stretch;
+  padding: 8px;
+  overflow: hidden;
+}
+.ss-help-modal[hidden] { display: none; }
+.ss-help-modal::before {
+  content: '';
+  position: absolute; inset: 0;
+  /* clickable overlay; modal body absorbs clicks via stopPropagation in body */
+}
+.ss-help-modal > .ss-help-header,
+.ss-help-modal > .ss-help-body { position: relative; }
+
+.ss-help-modal { flex-direction: column; gap: 0; padding: 0; background: rgba(15, 25, 45, 0.45); }
+.ss-help-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 8px 10px; background: #2a3a55; color: #fff;
+  border-radius: 6px 6px 0 0;
+}
+.ss-help-title { font-weight: 600; font-size: 13px; }
+.ss-help-close {
+  background: transparent; border: none; color: #fff; font-size: 20px;
+  cursor: pointer; line-height: 1; padding: 0 4px;
+}
+.ss-help-close:hover { color: #ffd700; }
+.ss-help-body {
+  flex-grow: 1; overflow-y: auto;
+  background: #fff; color: #222;
+  padding: 8px 12px; font-size: 12px; line-height: 1.4;
+  border-radius: 0 0 6px 6px;
+}
+.ss-help-body h3.ss-help-h {
+  margin: 8px 0 4px;
+  font-size: 12px; font-weight: 700; color: #2a3a55;
+  text-transform: uppercase; letter-spacing: 0.5px;
+  border-bottom: 1px solid #d1dbe6; padding-bottom: 2px;
+}
+.ss-help-body h3.ss-help-h:first-child { margin-top: 0; }
+.ss-help-table { border-collapse: collapse; margin: 4px 0 6px; width: 100%; }
+.ss-help-table td { padding: 2px 4px; vertical-align: top; }
+.ss-help-key {
+  font-family: 'Menlo', 'Monaco', monospace; font-size: 11px;
+  background: #eef1f5; padding: 1px 4px; border-radius: 3px;
+  white-space: nowrap; width: 1%;
+}
+.ss-help-val { color: #333; }
+
+.ss-help-item { margin: 4px 0 8px; }
+.ss-help-item-title { font-weight: 700; color: #2a3a55; font-size: 12px; }
+.ss-help-item-body { white-space: pre-line; color: #444; margin: 2px 0; }
+.ss-help-examples { list-style: none; margin: 2px 0 0 0; padding: 0; }
+.ss-help-examples li { margin: 1px 0; padding: 1px 0; }
+.ss-help-examples code {
+  font-family: 'Menlo', 'Monaco', monospace; font-size: 11px;
+  background: #f5f7fa; padding: 1px 4px; border-radius: 3px;
+  border: 1px solid #d1dbe6; color: #2a3a55;
+}
+.ss-help-note { color: #666; font-size: 11px; }
+
+.ss-help-btn {
+  background: transparent !important; color: #2a3a55 !important;
+  border: 1px solid #b0c4de !important; padding: 2px 7px !important;
+  border-radius: 50% !important; cursor: pointer;
+  font-size: 12px !important; line-height: 1 !important;
+  width: 22px; height: 22px;
+}
+.ss-help-btn:hover { background: #d1dbe6 !important; }
+
+/* Collapse-arrow flip when the list is collapsed. */
+.ss-list-region.ss-collapsed .ss-collapse { display: inline-block; transform: rotate(-90deg); }
+.ss-collapse { display: inline-block; transition: transform 0.15s ease; }
+
 @media (forced-colors: active) {
   .ss-panel { border: 1px solid CanvasText; background: Canvas; color: CanvasText; }
   .ss-list .ss-row-match { background: Highlight; color: HighlightText; }
+  .ss-help-body { background: Canvas; color: CanvasText; }
+  .ss-help-header { background: Canvas; color: CanvasText; border-bottom: 1px solid CanvasText; }
 }
 `;
 
@@ -843,7 +929,16 @@ If the shortcut is blocked by this site, use this menu.`;
   }
 
   // src/ui/input.js
-  var inputEl = null, goBtnEl = null, prevBtnEl = null, nextBtnEl = null, summaryEl = null, listeners2 = { onInput: null, onSubmit: null, onPrev: null, onNext: null, onEscape: null };
+  var inputEl = null, goBtnEl = null, prevBtnEl = null, nextBtnEl = null, summaryEl = null, listeners2 = { onInput: null, onSubmit: null, onPrev: null, onNext: null, onEscape: null }, PLACEHOLDERS = {
+    text: "Search (auto-detects /regex/ and timestamp ranges like 1:00-2:30)",
+    selector: 'CSS selector (e.g. div.warning > p, a[href*="example.com"])',
+    js: 'JavaScript (e.g. return [...document.querySelectorAll("a")].map(a=>a.href))'
+  };
+  function autoGrowIfMultiLine() {
+    if (!inputEl || inputEl.classList.contains("ss-mode-js")) return;
+    let lines = (inputEl.value.match(/\n/g) || []).length + 1;
+    lines > 1 ? inputEl.rows = Math.min(lines, 4) : inputEl.rows = 1;
+  }
   function build(state2) {
     return inputEl = el("textarea", {
       class: "ss-query",
@@ -852,8 +947,10 @@ If the shortcut is blocked by this site, use this menu.`;
       autocorrect: "off",
       rows: 1,
       "aria-label": "Search query",
-      placeholder: "search (auto-detects /regex/ and timestamp HH:MM:SS-HH:MM:SS)"
-    }), inputEl.addEventListener("input", () => listeners2.onInput?.(inputEl.value)), inputEl.addEventListener("keydown", (e) => {
+      placeholder: PLACEHOLDERS.text
+    }), inputEl.addEventListener("input", () => {
+      autoGrowIfMultiLine(), listeners2.onInput?.(inputEl.value);
+    }), inputEl.addEventListener("keydown", (e) => {
       if (e.key === "Escape") {
         e.preventDefault(), listeners2.onEscape?.();
         return;
@@ -876,25 +973,84 @@ If the shortcut is blocked by this site, use this menu.`;
     if (!inputEl) return;
     inputEl.value !== s.query && (inputEl.value = s.query);
     let wasJsMode = inputEl.classList.contains("ss-mode-js");
-    inputEl.classList.toggle("ss-mode-js", s.mode === "js"), inputEl.classList.toggle("ss-error", !!s.inputError), s.mode === "js" ? inputEl.removeAttribute("rows") : (inputEl.rows = 1, wasJsMode && (inputEl.style.height = "")), goBtnEl.hidden = s.live && s.mode !== "js";
+    inputEl.classList.toggle("ss-mode-js", s.mode === "js"), inputEl.classList.toggle("ss-error", !!s.inputError), s.mode === "js" ? (inputEl.removeAttribute("rows"), inputEl.placeholder = PLACEHOLDERS.js) : (inputEl.placeholder = s.mode === "selector" ? PLACEHOLDERS.selector : PLACEHOLDERS.text, wasJsMode && (inputEl.style.height = ""), autoGrowIfMultiLine()), goBtnEl.hidden = s.live && s.mode !== "js";
     let matches = s.matches || [], counter = summaryEl.querySelector(".ss-counter");
-    matches.length === 0 ? counter.textContent = s.query ? "0 matches" : "-" : counter.textContent = `${s.activeIndex + 1} / ${matches.length}`, prevBtnEl.disabled = matches.length === 0, nextBtnEl.disabled = matches.length === 0;
+    matches.length === 0 ? counter.textContent = s.query ? "0 matches" : "-" : s.append && Array.isArray(s.historical) && s.historical.length > 0 ? counter.textContent = `${s.activeIndex + 1} / ${matches.length} \xB7 list ${s.historical.length}` : counter.textContent = `${s.activeIndex + 1} / ${matches.length}`, prevBtnEl.disabled = matches.length === 0, nextBtnEl.disabled = matches.length === 0;
     let existing = summaryEl.querySelector(".ss-settling-dot");
     s.query && !s.domSettled ? existing || summaryEl.appendChild(el("span", { class: "ss-settling-dot", title: "Page still loading\u2026" })) : existing && existing.remove(), s.truncated ? summaryEl.querySelector(".ss-truncated") || summaryEl.appendChild(el("span", { class: "ss-truncated", style: { color: "#d83b01" } }, "(partial)")) : summaryEl.querySelector(".ss-truncated")?.remove();
   }
 
   // src/ui/controls.js
-  var modeButtons = {}, liveCb = null, appendCb = null, dedupeCb = null, logCb = null, copyBtn = null, clearBtn = null, dumpBtn = null, listeners3 = {};
+  var modeButtons = {}, liveCb = null, appendCb = null, dedupeCb = null, logCb = null, logWinCb = null, logConCb = null, copyBtn = null, clearBtn = null, dumpBtn = null, helpBtn = null, listeners3 = {};
   function build2() {
-    let makeModeBtn = (m, label, longLabel) => el("button", {
+    let MODE_DESC = {
+      text: "Text mode \u2014 plain text, auto-detects /regex/ and HH:MM:SS-HH:MM:SS ranges",
+      selector: "CSS selector mode \u2014 querySelectorAll syntax (e.g. div.warning > p)",
+      js: "JS mode \u2014 run JavaScript in the page realm (return value classified)"
+    }, makeModeBtn = (m, label) => el("button", {
       type: "button",
       role: "radio",
-      "aria-label": longLabel,
+      "aria-label": MODE_DESC[m],
       "aria-checked": "false",
+      title: MODE_DESC[m],
       "data-mode": m,
       onClick: () => listeners3.onMode?.(m)
     }, label);
-    modeButtons.text = makeModeBtn("text", "Text", "Text search mode"), modeButtons.selector = makeModeBtn("selector", "CSS", "CSS selector mode"), modeButtons.js = makeModeBtn("js", "JS", "JavaScript query mode"), liveCb = el("input", { type: "checkbox", "aria-label": "Live mode \u2014 search as you type", onChange: (e) => listeners3.onToggle?.("live", e.target.checked) }), appendCb = el("input", { type: "checkbox", "aria-label": "Append matches across pages and tabs", onChange: (e) => listeners3.onToggle?.("append", e.target.checked) }), dedupeCb = el("input", { type: "checkbox", "aria-label": "Dedupe matches in the list", onChange: (e) => listeners3.onToggle?.("dedupe", e.target.checked) }), logCb = el("input", { type: "checkbox", "aria-label": "Log matches to panel and console", onChange: (e) => listeners3.onToggle?.("log", e.target.checked) }), copyBtn = el("button", { type: "button", "aria-label": "Copy match list to clipboard", onClick: () => listeners3.onCopy?.() }, "Copy"), dumpBtn = el("button", { type: "button", hidden: !0, "aria-label": "Dump JS result to window.superSearchResults", onClick: () => listeners3.onDump?.() }, "Dump"), clearBtn = el("button", { type: "button", "aria-label": "Clear all matches and history", onClick: () => listeners3.onClearAll?.() }, "Clear");
+    modeButtons.text = makeModeBtn("text", "Text"), modeButtons.selector = makeModeBtn("selector", "CSS"), modeButtons.js = makeModeBtn("js", "JS"), liveCb = el("input", {
+      type: "checkbox",
+      "aria-label": "Live mode \u2014 search as you type",
+      title: "Live: search as you type (100ms debounce). Off = manual via Go / Enter.",
+      onChange: (e) => listeners3.onToggle?.("live", e.target.checked)
+    }), appendCb = el("input", {
+      type: "checkbox",
+      "aria-label": "Append matches across pages and tabs",
+      title: `Append: collect match VALUES into one running list across all tabs.
+Use for cross-tab triage workflows (e.g. scan 20 tabs, copy results).`,
+      onChange: (e) => listeners3.onToggle?.("append", e.target.checked)
+    }), dedupeCb = el("input", {
+      type: "checkbox",
+      "aria-label": "Dedupe matches in the list",
+      title: "Dedupe: hide duplicate rows in the displayed list (display-only).",
+      onChange: (e) => listeners3.onToggle?.("dedupe", e.target.checked)
+    }), logCb = el("input", {
+      type: "checkbox",
+      "aria-label": "Log matches with timestamps and URLs",
+      title: `Log: audit trail with timestamp + URL of every find.
+Different from Append \u2014 Append stores values; Log stores history of finds.`,
+      onChange: (e) => listeners3.onToggle?.("log", e.target.checked)
+    }), logWinCb = el("input", {
+      type: "checkbox",
+      "aria-label": "Show log in panel",
+      title: "Win: show log entries in the panel.",
+      onChange: (e) => listeners3.onToggle?.("log.win", e.target.checked)
+    }), logConCb = el("input", {
+      type: "checkbox",
+      "aria-label": "Mirror log to browser console",
+      title: "Con: mirror log entries to the browser DevTools console.",
+      onChange: (e) => listeners3.onToggle?.("log.con", e.target.checked)
+    }), copyBtn = el("button", {
+      type: "button",
+      "aria-label": "Copy match list to clipboard",
+      title: "Copy the visible match list to clipboard (tab-separated, with source URLs).",
+      onClick: () => listeners3.onCopy?.()
+    }, "Copy"), dumpBtn = el("button", {
+      type: "button",
+      hidden: !0,
+      "aria-label": "Dump JS result to window.superSearchResults",
+      title: "Dump the last JS query result to window.superSearchResults so you can inspect it in DevTools.",
+      onClick: () => listeners3.onDump?.()
+    }, "Dump"), clearBtn = el("button", {
+      type: "button",
+      "aria-label": "Clear all matches and history",
+      title: "Clear matches, accumulated list, and log (cross-tab synced).",
+      onClick: () => listeners3.onClearAll?.()
+    }, "Clear"), helpBtn = el("button", {
+      type: "button",
+      class: "ss-help-btn",
+      "aria-label": "Show help",
+      title: "Show help / keyboard shortcuts / examples",
+      onClick: () => listeners3.onHelp?.()
+    }, "?");
     let modePicker = el("div", {
       class: "ss-mode-picker",
       role: "radiogroup",
@@ -907,18 +1063,25 @@ If the shortcut is blocked by this site, use this menu.`;
         let next = e.key === "ArrowRight" ? order[(idx + 1) % order.length] : order[(idx - 1 + order.length) % order.length];
         modeButtons[next].focus(), listeners3.onMode?.(next);
       }
-    }, modeButtons.text, modeButtons.selector, modeButtons.js), controls = el(
+    }, modeButtons.text, modeButtons.selector, modeButtons.js), logTargets = el(
+      "span",
+      { class: "ss-log-targets", hidden: !0 },
+      el("label", { title: "Win: show log in the panel" }, logWinCb, "Win"),
+      el("label", { title: "Con: mirror log to DevTools console" }, logConCb, "Con")
+    ), controls = el(
       "div",
       { class: "ss-controls" },
-      el("label", {}, liveCb, "Live"),
-      el("label", {}, appendCb, "Append"),
-      el("label", {}, dedupeCb, "Dedupe"),
-      el("label", {}, logCb, "Log"),
+      el("label", { title: "Live: search as you type. JS mode is always manual." }, liveCb, "Live"),
+      el("label", { title: "Append: collect match values across all tabs" }, appendCb, "Append"),
+      el("label", { title: "Dedupe: hide duplicate rows" }, dedupeCb, "Dedupe"),
+      el("label", { title: "Log: audit trail with timestamps + URLs" }, logCb, "Log"),
+      logTargets,
       copyBtn,
       dumpBtn,
-      clearBtn
+      clearBtn,
+      helpBtn
     );
-    return el("div", { class: "ss-header" }, modePicker, controls);
+    return modeButtons.__logTargets = logTargets, el("div", { class: "ss-header" }, modePicker, controls);
   }
   function setListeners2(l) {
     listeners3 = l;
@@ -929,7 +1092,7 @@ If the shortcut is blocked by this site, use this menu.`;
         let sel = s.mode === m;
         modeButtons[m].setAttribute("aria-checked", sel ? "true" : "false"), modeButtons[m].setAttribute("aria-pressed", sel ? "true" : "false"), modeButtons[m].tabIndex = sel ? 0 : -1;
       }
-      liveCb.checked = !!s.live, appendCb.checked = !!s.append, dedupeCb.checked = !!s.dedupe, logCb.checked = !!s.log?.enabled, dumpBtn.hidden = !(s.mode === "js" && s.lastJsResult !== void 0);
+      liveCb.checked = !!s.live, appendCb.checked = !!s.append, dedupeCb.checked = !!s.dedupe, logCb.checked = !!s.log?.enabled, logWinCb.checked = !!s.log?.win, logConCb.checked = !!s.log?.con, modeButtons.__logTargets && (modeButtons.__logTargets.hidden = !s.log?.enabled), dumpBtn.hidden = !(s.mode === "js" && s.lastJsResultPresent);
     }
   }
 
@@ -941,20 +1104,29 @@ If the shortcut is blocked by this site, use this menu.`;
       class: "ss-list-header",
       "aria-expanded": "true",
       "aria-label": "Toggle match list",
+      title: "Click to collapse / expand the match list",
       onClick: () => listeners4.onToggleCollapse?.()
     }, "Found Matches", el("span", { class: "ss-collapse" }, "\u25BE")), regionEl = el("div", { class: "ss-list-region" }, headerEl, listEl), regionEl;
+  }
+  function urlBadgeText(url) {
+    try {
+      let u = new URL(url), seg = u.pathname.split("/").filter(Boolean)[0];
+      return seg ? `${u.host}/${seg}\u2026` : u.host;
+    } catch {
+      return String(url || "").slice(0, 30);
+    }
   }
   function setListeners3(l) {
     listeners4 = l;
   }
   function syncFromState3(s, opts = {}) {
     if (!listEl) return;
-    let data = s.append ? s.historical || [] : s.matches || [], shown = s.dedupe ? dedupe(data) : data;
-    if (clear(listEl), s.ui?.listCollapsed) {
-      regionEl.classList.add("ss-collapsed"), listEl.style.display = "none";
+    let data = s.append ? s.historical || [] : s.matches || [], shown = s.dedupe ? dedupe(data) : data, collapsed = !!s.ui?.listCollapsed;
+    if (clear(listEl), regionEl.classList.toggle("ss-collapsed", collapsed), headerEl && headerEl.setAttribute("aria-expanded", collapsed ? "false" : "true"), collapsed) {
+      listEl.style.display = "none";
       return;
     }
-    listEl.style.display = "", regionEl.classList.remove("ss-collapsed");
+    listEl.style.display = "";
     let MAX_RENDERED2 = 500, rendered = shown.slice(0, MAX_RENDERED2);
     for (let i = 0; i < rendered.length; i++) {
       let m = rendered[i], isActive = !s.append && i === s.activeIndex, activate = () => listeners4.onRowClick?.(m, i, s.append), li = el(
@@ -979,15 +1151,24 @@ If the shortcut is blocked by this site, use this menu.`;
           m.after
         )
       );
-      m.sourceUrl && m.sourceUrl !== (opts.currentUrl || location.href) && li.appendChild(el("span", { class: "ss-row-url" }, hostOf(m.sourceUrl))), listEl.appendChild(li);
+      if (m.sourceUrl) {
+        let here = canonicalUrl(opts.currentUrl || location.href), there = canonicalUrl(m.sourceUrl);
+        if (there && there !== here) {
+          let badge = el("span", { class: "ss-row-url", title: "from " + m.sourceUrl }, urlBadgeText(m.sourceUrl));
+          li.appendChild(badge);
+        }
+      }
+      listEl.appendChild(li);
     }
     shown.length > MAX_RENDERED2 && listEl.appendChild(el("li", { style: { color: "#888" } }, `\u2026 and ${shown.length - MAX_RENDERED2} more`));
   }
-  function hostOf(url) {
+  function canonicalUrl(url) {
+    if (!url) return "";
     try {
-      return new URL(url).host;
+      let u = new URL(url);
+      return u.origin + u.pathname;
     } catch {
-      return url.slice(0, 30);
+      return String(url);
     }
   }
   function dedupe(arr) {
@@ -1548,16 +1729,186 @@ If the shortcut is blocked by this site, use this menu.`;
     let visible = !!(s.log?.enabled && s.log?.win);
     if (region.classList.toggle("ss-visible", visible), !visible) return;
     clear(listEl2);
-    let entries2 = (s.logEntries || []).slice(-MAX_RENDERED);
-    for (let e of entries2)
-      listEl2.appendChild(el("li", {}, `[${shortTs(e.ts)}] ${e.kind}: ${e.value}`));
-    for (let d of getEntries().filter((x) => x.level === "error").slice(-10))
-      listEl2.appendChild(el("li", { class: "ss-log-error" }, `! ${d.msg}`));
+    let entries2 = (s.logEntries || []).slice(-MAX_RENDERED).reverse();
+    for (let e of entries2) {
+      let row = el(
+        "li",
+        {},
+        el("span", { class: "ss-log-ts" }, "[" + shortTs(e.ts) + "] "),
+        el("span", { class: "ss-log-kind" }, e.kind + ": ")
+      );
+      e.before && row.appendChild(el("span", { class: "ss-log-ctx" }, e.before)), row.appendChild(el("span", { class: "ss-log-match" }, e.value || "")), e.after && row.appendChild(el("span", { class: "ss-log-ctx" }, e.after)), e.sourceUrl && row.appendChild(el("span", { class: "ss-log-url", title: e.sourceUrl }, " \xB7 " + shortUrl(e.sourceUrl))), listEl2.appendChild(row);
+    }
+    for (let d of getEntries().filter((x) => x.level === "error").slice(-5).reverse())
+      listEl2.appendChild(el("li", { class: "ss-log-error" }, "! " + d.msg));
+  }
+  function shortUrl(url) {
+    try {
+      let u = new URL(url);
+      return u.host + (u.pathname && u.pathname !== "/" ? u.pathname.slice(0, 20) : "");
+    } catch {
+      return String(url).slice(0, 30);
+    }
   }
   function shortTs(iso) {
     if (typeof iso != "string") return "";
     let m = iso.match(/T(\d{2}:\d{2}:\d{2})/);
     return m ? m[1] : iso;
+  }
+
+  // src/ui/helpView.js
+  var modalEl = null, SECTIONS = [
+    {
+      h: "Keyboard",
+      rows: [
+        ["Ctrl+Shift+F", "Toggle the panel"],
+        ["Enter", "Next match (in Text / CSS mode)"],
+        ["Shift+Enter", "Previous match"],
+        ["Ctrl+Enter", "Run JS query (in JS mode)"],
+        ["Escape", "Hide panel"],
+        ["Arrow Left / Right", "Switch search mode"]
+      ]
+    },
+    {
+      h: "Search modes",
+      items: [
+        {
+          title: "Text",
+          body: "Plain text, case-insensitive. Auto-detects regex if wrapped in slashes and timestamp ranges.",
+          examples: [
+            ["lorem ipsum", "plain text"],
+            ["/error \\d+/gi", "regex with flags"],
+            ["1:00-2:30", "find timestamps in this range"],
+            ["01:00:00-02:30:00", "HH:MM:SS form"]
+          ]
+        },
+        {
+          title: "CSS",
+          body: "CSS selectors (querySelectorAll). Matched elements get a dashed pink outline.",
+          examples: [
+            ["div.warning > p", "descendant selectors"],
+            ['a[href*="example.com"]', "attribute filters"],
+            ["[data-id]:not(.hidden)", "pseudo-class + attribute"],
+            ["table tr:nth-child(odd)", "positional selectors"]
+          ]
+        },
+        {
+          title: "JS",
+          body: `Run JavaScript in the page realm. Result is classified:
+  Element / NodeList \u2192 highlighted on page
+  Array of strings \u2192 shown in the match list
+  Anything else \u2192 coerced to string
+The Dump button copies the last result to window.superSearchResults so you can grab it from DevTools.`,
+          examples: [
+            ["return document.title", "a single value"],
+            ['return [...document.querySelectorAll("a")].map(a=>a.href)', "array of strings"],
+            ['return document.querySelector("#main")', "an element"],
+            ["return Array.from(document.images).map(i=>i.src)", "all image URLs"]
+          ]
+        }
+      ]
+    },
+    {
+      h: "Options",
+      items: [
+        {
+          title: "Live",
+          body: "Search as you type (100ms debounce). Off \u2192 manual via Go button or Enter. JS mode is always manual to avoid eval'ing half-typed expressions."
+        },
+        {
+          title: "Append",
+          body: `Collect match values into one running list across all tabs.
+Use this when you're scanning N tabs to gather results, e.g. searching for the same product across 20 shopping pages and copying the list out. Persists across reloads and tabs.`
+        },
+        {
+          title: "Dedupe",
+          body: "Display-only filter: hide duplicate rows. Combine with Append for a unique cross-tab collection."
+        },
+        {
+          title: "Log",
+          body: `Different from Append. Log is an audit trail with timestamps + URLs of every find. Use this when you want to know when and where a value appeared, not just collect the values.
+Log dedupes by (value, before, after, url) within a session so live-mode typing isn't spammy.`
+        }
+      ]
+    },
+    {
+      h: "Buttons",
+      items: [
+        { title: "Go", body: "Run search manually (visible when Live is off, or always in JS mode)." },
+        { title: "< / >", body: "Previous / next match. Same as Shift+Enter / Enter inside the search box." },
+        { title: "Copy", body: "Copy the visible match list to the clipboard, tab-separated. Cross-page rows include their URL." },
+        { title: "Dump", body: "Only visible after a JS query. Writes the result to window.superSearchResults for inspection in DevTools." },
+        { title: "Clear", body: "Clears matches + accumulated list + log. Cross-tab synced \u2014 clears on all your tabs." }
+      ]
+    },
+    {
+      h: "Tips",
+      items: [
+        { title: "Shortcut blocked by host page", body: 'Some sites capture Ctrl+Shift+F (Notion, Slack, Google Docs). Use the Tampermonkey extension menu: "Super Search: Toggle panel".' },
+        { title: "Single-page apps", body: 'Search auto re-runs on SPA navigation and DOM updates. If the page is "settling" (still loading content), an orange pulsing dot appears next to the match count \u2014 results will refresh once the page quiets.' },
+        { title: "Big pages", body: 'Search is capped at 100k text nodes per run. If a result reads "(partial)" the page exceeded that \u2014 refine the query or use CSS mode for structural search.' },
+        { title: "Privacy", body: `Toggle "Incognito" from the Tampermonkey menu to stop persistence for the session. URLs are stored without query strings or hashes so auth tokens don't leak.` }
+      ]
+    }
+  ];
+  function build5() {
+    modalEl = el("div", { class: "ss-help-modal", hidden: !0, role: "dialog", "aria-modal": "true", "aria-label": "Help" });
+    let header = el(
+      "div",
+      { class: "ss-help-header" },
+      el("div", { class: "ss-help-title" }, "Super Search \u2014 Help"),
+      el("button", {
+        type: "button",
+        class: "ss-help-close",
+        "aria-label": "Close help",
+        onClick: () => hide2()
+      }, "\xD7")
+    ), body = el("div", { class: "ss-help-body" });
+    for (let sec of SECTIONS) {
+      if (body.appendChild(el("h3", { class: "ss-help-h" }, sec.h)), sec.rows) {
+        let t = el("table", { class: "ss-help-table" });
+        for (let [k, v] of sec.rows)
+          t.appendChild(el(
+            "tr",
+            {},
+            el("td", { class: "ss-help-key" }, k),
+            el("td", { class: "ss-help-val" }, v)
+          ));
+        body.appendChild(t);
+      }
+      if (sec.items)
+        for (let it of sec.items)
+          body.appendChild(el(
+            "div",
+            { class: "ss-help-item" },
+            el("div", { class: "ss-help-item-title" }, it.title),
+            el("div", { class: "ss-help-item-body" }, it.body),
+            ...it.examples ? [el(
+              "ul",
+              { class: "ss-help-examples" },
+              ...it.examples.map(([code, note]) => el(
+                "li",
+                {},
+                el("code", {}, code),
+                el("span", { class: "ss-help-note" }, " \u2014 " + note)
+              ))
+            )] : []
+          ));
+    }
+    return modalEl.appendChild(header), modalEl.appendChild(body), modalEl.addEventListener("click", (e) => {
+      e.target === modalEl && hide2();
+    }), modalEl.addEventListener("keydown", (e) => {
+      e.key === "Escape" && (e.preventDefault(), e.stopPropagation(), hide2());
+    }), modalEl;
+  }
+  function show2() {
+    modalEl && (modalEl.hidden = !1, modalEl.querySelector(".ss-help-close")?.focus());
+  }
+  function hide2() {
+    modalEl && (modalEl.hidden = !0);
+  }
+  function toggle2() {
+    modalEl && (modalEl.hidden ? show2() : hide2());
   }
 
   // src/logging.js
@@ -1595,7 +1946,7 @@ If the shortcut is blocked by this site, use this menu.`;
   }
 
   // src/privacy.js
-  function hostOf2(url) {
+  function hostOf(url) {
     try {
       return new URL(url).hostname;
     } catch {
@@ -1604,7 +1955,7 @@ If the shortcut is blocked by this site, use this menu.`;
   }
   function isAllowedToPersist(state2, currentUrl) {
     if (state2?.privacy?.incognito) return !1;
-    let host2 = hostOf2(currentUrl || (typeof location < "u" ? location.href : ""));
+    let host2 = hostOf(currentUrl || (typeof location < "u" ? location.href : ""));
     if (!host2) return !0;
     let denylist = state2?.privacy?.denylist || [];
     for (let pattern of denylist)
@@ -1626,9 +1977,9 @@ If the shortcut is blocked by this site, use this menu.`;
   var teardown2 = null;
   function buildUI(shadow2, root2) {
     teardown2 && teardown2();
-    let unsubs = [], controls = build2(), inputBuilt = build(state_exports), list = build3(), logRegion = build4();
-    root2.appendChild(controls), root2.appendChild(inputBuilt.row), root2.appendChild(inputBuilt.summary), root2.appendChild(list), root2.appendChild(logRegion), installStyles(), install();
-    let performSearch = (auto = !1) => {
+    let unsubs = [], controls = build2(), inputBuilt = build(state_exports), list = build3(), logRegion = build4(), helpModal = build5();
+    root2.appendChild(controls), root2.appendChild(inputBuilt.row), root2.appendChild(inputBuilt.summary), root2.appendChild(list), root2.appendChild(logRegion), root2.appendChild(helpModal), installStyles(), install();
+    let lastResultFingerprint = null, fingerprintMatches = (ms) => !ms || ms.length === 0 ? "empty" : ms.map((m) => m.id || m.value + "|" + m.before + "|" + m.after).join(","), performSearch = (auto = !1) => {
       let s = get(), result = dispatch({ query: s.query, mode: s.mode, root: document.body, sourceUrl: location.href }), allowedPersist = isAllowedToPersist(s, location.href), patch = {
         matches: result.matches,
         activeIndex: 0,
@@ -1637,7 +1988,9 @@ If the shortcut is blocked by this site, use this menu.`;
         truncated: !!result.truncated,
         jsErrorMessage: result.jsErrorMessage || null
       };
-      if (result.lastJsResult !== void 0 && (patch.lastJsResult = result.lastJsResult, patch.lastJsResultPresent = !0), s.append && allowedPersist && (patch.historical = mergeHistoricalLocal(s.historical, result.matches)), s.log?.enabled && allowedPersist) {
+      result.lastJsResult !== void 0 && (patch.lastJsResult = result.lastJsResult, patch.lastJsResultPresent = !0), s.append && allowedPersist && (patch.historical = mergeHistoricalLocal(s.historical, result.matches));
+      let fp = fingerprintMatches(result.matches), sameAsLast = auto && fp === lastResultFingerprint;
+      if (lastResultFingerprint = fp, s.log?.enabled && allowedPersist && !sameAsLast) {
         let entries2 = logMatches(result.matches);
         if (entries2.length && (patch.logEntries = [...s.logEntries || [], ...entries2].slice(-1e3), s.log.con && typeof console < "u"))
           for (let e of entries2) console.log("[super-search]", e);
@@ -1675,7 +2028,10 @@ If the shortcut is blocked by this site, use this menu.`;
         set({ mode: m }), maybeLive();
       },
       onToggle(flag, v) {
-        flag === "log" ? setDeep({ log: { enabled: v } }) : set({ [flag]: v }), flag === "live" && v && maybeLive();
+        flag === "log" ? setDeep({ log: { enabled: v } }) : flag === "log.win" ? setDeep({ log: { win: v } }) : flag === "log.con" ? setDeep({ log: { con: v } }) : set({ [flag]: v }), flag === "live" && v && maybeLive();
+      },
+      onHelp() {
+        toggle2();
       },
       onCopy() {
         let s = get(), items = s.append ? s.historical : s.matches;
@@ -1750,7 +2106,8 @@ If the shortcut is blocked by this site, use this menu.`;
         lastPrunedRef = s.matches;
     });
     return unsubs.push(unsub2), set({}), unsubs.push(on("dom-changed", () => {
-      get().live && performSearch(!0);
+      let s = get();
+      s.query && s.mode !== "js" && (s.live || s.append) && performSearch(!0);
     })), unsubs.push(on("nav", () => {
       rebind(), setMatches([], 0), restore(), set({ matches: [], activeIndex: 0 }), get().live && get().query && get().mode !== "js" && performSearch(!0);
     })), unsubs.push(on("pagehide", () => {
@@ -1758,7 +2115,7 @@ If the shortcut is blocked by this site, use this menu.`;
     })), unsubs.push(on("dom-unsettled", () => set({ domSettled: !1 }))), unsubs.push(on("dom-settled", () => {
       set({ domSettled: !0 });
       let s = get();
-      s.live && s.query && s.mode !== "js" && performSearch(!0);
+      !s.query || s.mode === "js" || (s.live || s.append) && performSearch(!0);
     })), unsubs.push(on("observer-auto-paused", () => {
       log.warn("Search auto-paused \u2014 page is mutating too rapidly. Will resume after 30s of quiet.");
     })), teardown2 = () => {
@@ -1888,7 +2245,9 @@ If the shortcut is blocked by this site, use this menu.`;
       start({
         visibilityGet: () => isVisible(),
         queryGet: () => get().query,
-        liveGet: () => get().live
+        // Observer runs when Live mode is on OR Append mode is on (because
+        // Append + a passive panel is the "scan tabs, collect" workflow).
+        liveGet: () => get().live || get().append
       }), start2();
     } catch (e) {
       log.warn("observer/nav start failed: " + e.message);

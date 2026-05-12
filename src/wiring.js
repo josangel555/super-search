@@ -17,6 +17,7 @@ import * as observer from './observer.js';
 import * as storage from './storage.js';
 import { pruneDead, adjustIndex } from './lifecycle.js';
 import * as logView from './ui/logView.js';
+import * as helpView from './ui/helpView.js';
 import { logMatches } from './logging.js';
 import { isAllowedToPersist } from './privacy.js';
 import { debounce } from './util/debounce.js';
@@ -34,23 +35,33 @@ export function buildUI(shadow, root) {
   const inputBuilt = inputView.build(state);
   const list = listView.build();
   const logRegion = logView.build();
+  const helpModal = helpView.build();
   root.appendChild(controls);
   root.appendChild(inputBuilt.row);
   root.appendChild(inputBuilt.summary);
   root.appendChild(list);
   root.appendChild(logRegion);
+  root.appendChild(helpModal);
 
   // Install document-level highlight styles (CSS pseudo-selector ::highlight
   // can't be scoped to a shadow root; needs to be in main document).
   installHlStyles();
   installHl();
 
+  // Track the previous result's fingerprint so we can quiet logging on
+  // auto-triggered searches that find the same matches. Without this, every
+  // observer-driven re-search re-emits the entire match set into the log.
+  let lastResultFingerprint = null;
+  const fingerprintMatches = (ms) => {
+    if (!ms || ms.length === 0) return 'empty';
+    // Cheap fingerprint: ids joined. Stable per content via matchIdFor.
+    return ms.map(m => m.id || (m.value + '|' + m.before + '|' + m.after)).join(',');
+  };
+
   const performSearch = (auto = false) => {
     const s = state.get();
     const result = dispatch({ query: s.query, mode: s.mode, root: document.body, sourceUrl: location.href });
 
-    // Build the next patch in one batch to avoid 3-4 cascading re-renders
-    // per user keystroke.
     const allowedPersist = isAllowedToPersist(s, location.href);
     const patch = {
       matches: result.matches,
@@ -67,7 +78,15 @@ export function buildUI(shadow, root) {
     if (s.append && allowedPersist) {
       patch.historical = mergeHistoricalLocal(s.historical, result.matches);
     }
-    if (s.log?.enabled && allowedPersist) {
+
+    // Log-noise guard: on auto-triggered searches (observer / dom-settled /
+    // every-keystroke live-mode), skip log emission if the result set is
+    // identical to the previous run. Manual submits always log.
+    const fp = fingerprintMatches(result.matches);
+    const sameAsLast = auto && fp === lastResultFingerprint;
+    lastResultFingerprint = fp;
+
+    if (s.log?.enabled && allowedPersist && !sameAsLast) {
       const entries = logMatches(result.matches);
       if (entries.length) {
         patch.logEntries = [...(s.logEntries || []), ...entries].slice(-1000);
@@ -147,11 +166,16 @@ export function buildUI(shadow, root) {
     onToggle(flag, v) {
       if (flag === 'log') {
         state.setDeep({ log: { enabled: v } });
+      } else if (flag === 'log.win') {
+        state.setDeep({ log: { win: v } });
+      } else if (flag === 'log.con') {
+        state.setDeep({ log: { con: v } });
       } else {
         state.set({ [flag]: v });
       }
       if (flag === 'live' && v) maybeLive();
     },
+    onHelp() { helpView.toggle(); },
     onCopy() {
       const s = state.get();
       const items = s.append ? s.historical : s.matches;
@@ -249,9 +273,15 @@ export function buildUI(shadow, root) {
   state.set({});
 
   // Bus events: observer + nav + settling drive re-search.
+  // Re-run on dom-changed when EITHER Live mode is on, OR Append+Manual is on
+  // (the old script did this — it matches the "scan many pages" workflow where
+  // the user is leaving the panel passive and wants newly-arrived content to
+  // be added to the running list).
   unsubs.push(bus.on('dom-changed', () => {
-    if (!state.get().live) return;
-    performSearch(true);
+    const s = state.get();
+    if (!s.query) return;
+    if (s.mode === 'js') return;                 // never auto-eval JS
+    if (s.live || s.append) performSearch(true);
   }));
   unsubs.push(bus.on('nav', () => {
     // SPA navigation: rebind observer (body may have been replaced), drop
@@ -272,9 +302,10 @@ export function buildUI(shadow, root) {
   unsubs.push(bus.on('dom-settled', () => {
     state.set({ domSettled: true });
     // Opportunistic re-run if we have a query — page may have grown more matches.
-    // Skip JS mode (manual only).
+    // Skip JS mode (manual only). Same Append-or-Live gate as dom-changed.
     const s = state.get();
-    if (s.live && s.query && s.mode !== 'js') performSearch(true);
+    if (!s.query || s.mode === 'js') return;
+    if (s.live || s.append) performSearch(true);
   }));
   unsubs.push(bus.on('observer-auto-paused', () => {
     log.warn('Search auto-paused — page is mutating too rapidly. Will resume after 30s of quiet.');

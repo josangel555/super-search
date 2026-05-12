@@ -19,14 +19,33 @@ export function syncFromState(s) {
   region.classList.toggle('ss-visible', visible);
   if (!visible) return;
   clear(listEl);
-  const entries = (s.logEntries || []).slice(-MAX_RENDERED);
+  // Newest first — easier to scan when scrolling a long log.
+  const entries = (s.logEntries || []).slice(-MAX_RENDERED).reverse();
   for (const e of entries) {
-    listEl.appendChild(el('li', {}, `[${shortTs(e.ts)}] ${e.kind}: ${e.value}`));
+    const row = el('li', {},
+      el('span', { class: 'ss-log-ts' }, '[' + shortTs(e.ts) + '] '),
+      el('span', { class: 'ss-log-kind' }, e.kind + ': '),
+    );
+    // Show context-before, the match (highlighted), context-after.
+    if (e.before) row.appendChild(el('span', { class: 'ss-log-ctx' }, e.before));
+    row.appendChild(el('span', { class: 'ss-log-match' }, e.value || ''));
+    if (e.after) row.appendChild(el('span', { class: 'ss-log-ctx' }, e.after));
+    if (e.sourceUrl) {
+      row.appendChild(el('span', { class: 'ss-log-url', title: e.sourceUrl }, ' · ' + shortUrl(e.sourceUrl)));
+    }
+    listEl.appendChild(row);
   }
-  // Append recent diagnostics errors.
-  for (const d of getDiagEntries().filter(x => x.level === 'error').slice(-10)) {
-    listEl.appendChild(el('li', { class: 'ss-log-error' }, `! ${d.msg}`));
+  // Show recent error diagnostics with an "!" prefix.
+  for (const d of getDiagEntries().filter(x => x.level === 'error').slice(-5).reverse()) {
+    listEl.appendChild(el('li', { class: 'ss-log-error' }, '! ' + d.msg));
   }
+}
+
+function shortUrl(url) {
+  try {
+    const u = new URL(url);
+    return u.host + (u.pathname && u.pathname !== '/' ? u.pathname.slice(0, 20) : '');
+  } catch { return String(url).slice(0, 30); }
 }
 
 function shortTs(iso) {

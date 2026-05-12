@@ -9,6 +9,24 @@ let nextBtnEl = null;
 let summaryEl = null;
 let listeners = { onInput: null, onSubmit: null, onPrev: null, onNext: null, onEscape: null };
 
+const PLACEHOLDERS = {
+  text: 'Search (auto-detects /regex/ and timestamp ranges like 1:00-2:30)',
+  selector: 'CSS selector (e.g. div.warning > p, a[href*="example.com"])',
+  js: 'JavaScript (e.g. return [...document.querySelectorAll("a")].map(a=>a.href))',
+};
+
+function autoGrowIfMultiLine() {
+  if (!inputEl) return;
+  if (inputEl.classList.contains('ss-mode-js')) return;   // js mode already multi-line
+  // Single-line modes: grow up to 4 lines if the user pasted multi-line text.
+  const lines = (inputEl.value.match(/\n/g) || []).length + 1;
+  if (lines > 1) {
+    inputEl.rows = Math.min(lines, 4);
+  } else {
+    inputEl.rows = 1;
+  }
+}
+
 export function build(state) {
   inputEl = el('textarea', {
     class: 'ss-query',
@@ -17,9 +35,12 @@ export function build(state) {
     autocorrect: 'off',
     rows: 1,
     'aria-label': 'Search query',
-    placeholder: 'search (auto-detects /regex/ and timestamp HH:MM:SS-HH:MM:SS)',
+    placeholder: PLACEHOLDERS.text,
   });
-  inputEl.addEventListener('input', () => listeners.onInput?.(inputEl.value));
+  inputEl.addEventListener('input', () => {
+    autoGrowIfMultiLine();
+    listeners.onInput?.(inputEl.value);
+  });
   inputEl.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       e.preventDefault();
@@ -62,20 +83,24 @@ export function syncFromState(s) {
   inputEl.classList.toggle('ss-error', !!s.inputError);
   if (s.mode === 'js') {
     inputEl.removeAttribute('rows');
+    inputEl.placeholder = PLACEHOLDERS.js;
   } else {
-    inputEl.rows = 1;
+    inputEl.placeholder = s.mode === 'selector' ? PLACEHOLDERS.selector : PLACEHOLDERS.text;
     // Clear any inline height the user dragged onto the textarea in JS mode
-    // so switching back to text/selector returns to single-line.
+    // so switching back to text/selector returns to single-line (or autogrown).
     if (wasJsMode) inputEl.style.height = '';
+    autoGrowIfMultiLine();
   }
   // Show Go button when manual (live=false) OR in JS mode (always manual).
   goBtnEl.hidden = s.live && s.mode !== 'js';
 
-  // Summary
+  // Summary: shows page-position + total + (if Append) list-size.
   const matches = s.matches || [];
   const counter = summaryEl.querySelector('.ss-counter');
   if (matches.length === 0) {
     counter.textContent = s.query ? '0 matches' : '-';
+  } else if (s.append && Array.isArray(s.historical) && s.historical.length > 0) {
+    counter.textContent = `${s.activeIndex + 1} / ${matches.length} · list ${s.historical.length}`;
   } else {
     counter.textContent = `${s.activeIndex + 1} / ${matches.length}`;
   }

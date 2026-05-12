@@ -131,7 +131,9 @@ function boot2() {
     observer.start({
       visibilityGet: () => panel.isVisible(),
       queryGet: () => state.get().query,
-      liveGet: () => state.get().live,
+      // Observer runs when Live mode is on OR Append mode is on (because
+      // Append + a passive panel is the "scan tabs, collect" workflow).
+      liveGet: () => state.get().live || state.get().append,
     });
     nav.start();
   } catch (e) { log.warn('observer/nav start failed: ' + e.message); }
