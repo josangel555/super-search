@@ -8,14 +8,14 @@ import * as inputView from './ui/input.js';
 import * as controlsView from './ui/controls.js';
 import * as listView from './ui/matchList.js';
 import { dispatch } from './search/dispatcher.js';
-import { setMatches as setHighlights, install as installHl, installStyles as installHlStyles, setActiveOnly } from './highlight.js';
+import { syncMatches as setHighlights, install as installHl, installStyles as installHlStyles } from './highlight.js';
 import { applyOutlines, restore as restoreOutlines } from './elementHighlight.js';
 import { nextIndex, prevIndex, scrollToMatch } from './navigate.js';
 import { gm } from './gm.js';
 import * as bus from './bus.js';
 import * as observer from './observer.js';
 import * as storage from './storage.js';
-import { pruneDead, adjustIndex } from './lifecycle.js';
+import { pruneDead, adjustIndex, isAlive } from './lifecycle.js';
 import * as logView from './ui/logView.js';
 import * as helpView from './ui/helpView.js';
 import { logMatches } from './logging.js';
@@ -62,6 +62,32 @@ export function buildUI(shadow, root) {
     const s = state.get();
     const result = dispatch({ query: s.query, mode: s.mode, root: document.body, sourceUrl: location.href });
 
+    // Fingerprint match BEFORE deciding what to do. Used for both log-noise
+    // quieting AND highlight-flicker suppression on pages with animations
+    // (animation triggers observer, observer re-runs search, identical
+    // result set, but clear-and-re-add of CSS.highlights causes a visible
+    // 1-frame flicker on the active match).
+    const fp = fingerprintMatches(result.matches);
+    const sameAsLast = auto && fp === lastResultFingerprint;
+    lastResultFingerprint = fp;
+
+    if (sameAsLast) {
+      // Result set is logically identical. Three things to preserve:
+      //  1. activeIndex (don't bounce user back to match 0)
+      //  2. visual highlights (don't repaint -> no flicker)
+      //  3. log silence (already handled by sameAsLast gate below)
+      // We DO still refresh the matches[] array so its Range objects are
+      // current — if the DOM moved underneath us, fresh ranges anchor to
+      // the new positions while the visual stays steady this frame; the
+      // next user navigation will use the fresh ranges.
+      const idx = (s.activeIndex < result.matches.length) ? s.activeIndex : 0;
+      state.set({ matches: result.matches, activeIndex: idx });
+      // Skip setHighlights + applyOutlines — old highlight ranges still
+      // render at the same content. If any have detached, the lifecycle
+      // pruner subscriber will catch them on its own pass.
+      return;
+    }
+
     const allowedPersist = isAllowedToPersist(s, location.href);
     const patch = {
       matches: result.matches,
@@ -79,14 +105,7 @@ export function buildUI(shadow, root) {
       patch.historical = mergeHistoricalLocal(s.historical, result.matches);
     }
 
-    // Log-noise guard: on auto-triggered searches (observer / dom-settled /
-    // every-keystroke live-mode), skip log emission if the result set is
-    // identical to the previous run. Manual submits always log.
-    const fp = fingerprintMatches(result.matches);
-    const sameAsLast = auto && fp === lastResultFingerprint;
-    lastResultFingerprint = fp;
-
-    if (s.log?.enabled && allowedPersist && !sameAsLast) {
+    if (s.log?.enabled && allowedPersist) {
       const entries = logMatches(result.matches);
       if (entries.length) {
         patch.logEntries = [...(s.logEntries || []), ...entries].slice(-1000);
@@ -113,9 +132,82 @@ export function buildUI(shadow, root) {
     const s = state.get();
     if (s.matches.length === 0) return;
     state.set({ activeIndex: idx });
-    setActiveOnly(s.matches, idx);
+    setHighlights(s.matches, idx);
     applyOutlines(s.matches, idx);
     scrollToMatch(s.matches[idx]);
+  };
+
+  // Incremental search: only re-scan the dirty subtrees the observer reported.
+  // Survivors (matches not inside any dirty root, still alive) are kept;
+  // fresh matches from dirty roots are merged in by content-derived id;
+  // CSS.highlights is updated as a delta (no clear-and-rebuild flicker).
+  const performIncrementalSearch = (scanRoots) => {
+    const s = state.get();
+    const old = s.matches || [];
+    const inDirty = (m) => {
+      const node = (m.range && m.range.startContainer) || m.element;
+      if (!node) return false;
+      for (const r of scanRoots) { if (r.contains(node)) return true; }
+      return false;
+    };
+
+    // 1. Survivors: matches outside all dirty roots AND still alive.
+    const survivors = old.filter(m => isAlive(m) && !inDirty(m));
+
+    // 2. Scan only the dirty subtrees.
+    const fresh = [];
+    for (const r of scanRoots) {
+      const sub = dispatch({ query: s.query, mode: s.mode, root: r, sourceUrl: location.href });
+      if (sub && Array.isArray(sub.matches)) fresh.push(...sub.matches);
+    }
+
+    // 3. Concat. ScanRoots are disjoint from survivors' nodes (survivors are
+    // OUTSIDE the dirty roots), so there are no positional duplicates. We do
+    // NOT dedup by id here — two matches with identical content in different
+    // DOM positions are legitimately separate highlight rows. Cross-tab
+    // historical dedup happens elsewhere (mergeHistoricalLocal) where it's
+    // semantically correct.
+    const merged = [...survivors, ...fresh];
+
+    // 4. Preserve the active match by id. If the prev active is still in
+    // merged, find its new position; otherwise default to 0.
+    const prevActive = old[s.activeIndex];
+    let newActiveIndex = 0;
+    if (prevActive) {
+      const idx = merged.findIndex(m => m.id === prevActive.id);
+      if (idx !== -1) newActiveIndex = idx;
+    }
+
+    // 5. Append + log: new matches only (no re-logging of survivors).
+    const addedToLog = fresh.filter(m => !old.some(o => o.id === m.id));
+    const allowedPersist = isAllowedToPersist(s, location.href);
+    const patch = {
+      matches: merged,
+      activeIndex: newActiveIndex,
+      inputError: null,
+      truncated: false,
+    };
+    if (s.append && allowedPersist && addedToLog.length) {
+      patch.historical = mergeHistoricalLocal(s.historical, addedToLog);
+    }
+    if (s.log?.enabled && allowedPersist && addedToLog.length) {
+      const entries = logMatches(addedToLog);
+      if (entries.length) {
+        patch.logEntries = [...(s.logEntries || []), ...entries].slice(-1000);
+        if (s.log.con && typeof console !== 'undefined') {
+          for (const e of entries) console.log('[super-search]', e);
+        }
+      }
+    }
+    state.batch(() => state.set(patch));
+
+    // 6. CSS.highlights + element outlines: delta-apply.
+    setHighlights(merged, newActiveIndex);
+    applyOutlines(merged, newActiveIndex);
+
+    // Refresh the fingerprint so the next auto-trigger can short-circuit
+    // correctly if nothing changes further.
+    lastResultFingerprint = fingerprintMatches(merged);
   };
 
   inputView.setListeners({
@@ -251,8 +343,7 @@ export function buildUI(shadow, root) {
   unsubs.push(unsub1);
 
   // Lifecycle pruning subscriber: drops dead matches when DOM changes.
-  // Re-uses the batch() guard inside state.set so the recursive notify is
-  // coalesced rather than re-entered.
+  // syncMatches is delta-only so dropping dead matches is now flicker-free.
   let lastPrunedRef = null;
   const unsub2 = state.subscribe((s) => {
     if (!s.matches || s.matches.length === 0) return;
@@ -262,7 +353,7 @@ export function buildUI(shadow, root) {
       lastPrunedRef = live;
       const newIdx = adjustIndex(s.activeIndex, s.matches.length, live.length);
       state.set({ matches: live, activeIndex: newIdx });
-      setHighlights(live, newIdx);
+      setHighlights(live, newIdx);          // delta-apply removes dead ranges only
     } else {
       lastPrunedRef = s.matches;
     }
@@ -273,15 +364,23 @@ export function buildUI(shadow, root) {
   state.set({});
 
   // Bus events: observer + nav + settling drive re-search.
-  // Re-run on dom-changed when EITHER Live mode is on, OR Append+Manual is on
-  // (the old script did this — it matches the "scan many pages" workflow where
-  // the user is leaving the panel passive and wants newly-arrived content to
-  // be added to the running list).
-  unsubs.push(bus.on('dom-changed', () => {
+  // Re-run on dom-changed when EITHER Live mode is on, OR Append is on
+  // (the "scan many pages passively" workflow). Selector mode gets full
+  // scan (selector may match anywhere); text/regex/timestamp get
+  // incremental scan when the observer payload tells us which subtrees
+  // actually changed.
+  unsubs.push(bus.on('dom-changed', (payload) => {
     const s = state.get();
     if (!s.query) return;
     if (s.mode === 'js') return;                 // never auto-eval JS
-    if (s.live || s.append) performSearch(true);
+    if (!(s.live || s.append)) return;
+
+    const fullScan = !payload || payload.fullScan || !payload.scanRoots || payload.scanRoots.length === 0;
+    if (fullScan || s.mode === 'selector') {
+      performSearch(true);
+    } else {
+      performIncrementalSearch(payload.scanRoots);
+    }
   }));
   unsubs.push(bus.on('nav', () => {
     // SPA navigation: rebind observer (body may have been replaced), drop

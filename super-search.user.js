@@ -866,23 +866,75 @@ If the shortcut is blocked by this site, use this menu.`;
   }
 
   // src/observer.js
-  var DEBOUNCE_MS = 500, SETTLE_WINDOW_MS = 500, SETTLE_THRESHOLD = 5, AUTOPAUSE_RATE_LIMIT = 5, AUTOPAUSE_WINDOW_MS = 1e4, AUTOPAUSE_COOLDOWN_MS = 3e4, observer = null, settleTimer = null, mutationsThisWindow = 0, isSettled = !1, visibilityGet = () => !0, queryGet = () => "", liveGet = () => !0, recentTriggers = [], autoPaused = !1, lastPauseAt = 0, fireMutate = debounce(DEBOUNCE_MS, () => {
-    if (autoPaused && safe.dateNow() - lastPauseAt > AUTOPAUSE_COOLDOWN_MS && (autoPaused = !1, recentTriggers = [], emit("observer-resumed"), log.info("observer auto-resumed after cooldown")), autoPaused || !visibilityGet() || !queryGet() || !liveGet()) return;
+  var DEBOUNCE_MS = 500, SETTLE_WINDOW_MS = 500, SETTLE_THRESHOLD = 5, AUTOPAUSE_RATE_LIMIT = 5, AUTOPAUSE_WINDOW_MS = 1e4, AUTOPAUSE_COOLDOWN_MS = 3e4, MAX_DIRTY_ROOTS = 50, observer = null, settleTimer = null, mutationsThisWindow = 0, isSettled = !1, visibilityGet = () => !0, queryGet = () => "", liveGet = () => !0, recentTriggers = [], autoPaused = !1, lastPauseAt = 0, pendingRecords = [], fireMutate = debounce(DEBOUNCE_MS, () => {
+    let records = pendingRecords;
+    if (pendingRecords = [], autoPaused && safe.dateNow() - lastPauseAt > AUTOPAUSE_COOLDOWN_MS && (autoPaused = !1, recentTriggers = [], emit("observer-resumed"), log.info("observer auto-resumed after cooldown")), autoPaused || !visibilityGet() || !queryGet() || !liveGet()) return;
     recentTriggers.push(safe.dateNow());
     let cutoff = safe.dateNow() - AUTOPAUSE_WINDOW_MS;
     if (recentTriggers = recentTriggers.filter((t) => t >= cutoff), recentTriggers.length > AUTOPAUSE_RATE_LIMIT) {
       autoPaused = !0, lastPauseAt = safe.dateNow(), log.warn("observer auto-paused (too many DOM changes; will auto-resume after quiet)"), emit("observer-auto-paused");
       return;
     }
-    emit("dom-changed");
+    let payload = collectPayload(records);
+    emit("dom-changed", payload);
   });
+  function collectPayload(records) {
+    if (!records || records.length === 0) return { fullScan: !0, scanRoots: [] };
+    let raw = /* @__PURE__ */ new Set(), fullScan = !1;
+    for (let r of records) {
+      let t = r.target;
+      if (t) {
+        if (t === document.body || t === document.documentElement) {
+          fullScan = !0;
+          break;
+        }
+        if (r.type === "characterData")
+          t.parentElement && raw.add(t.parentElement);
+        else if (r.type === "childList") {
+          raw.add(t);
+          for (let n of r.addedNodes)
+            n && n.nodeType === 1 && raw.add(n);
+        }
+      }
+    }
+    if (fullScan || raw.size === 0) return { fullScan: !0, scanRoots: [] };
+    if (raw.size > MAX_DIRTY_ROOTS) return { fullScan: !0, scanRoots: [] };
+    let filtered = [];
+    for (let el2 of raw)
+      if (el2.isConnected) {
+        try {
+          if (el2.closest && el2.closest('div[id^="ss-"]')) continue;
+        } catch {
+        }
+        filtered.push(el2);
+      }
+    if (filtered.length === 0) return { fullScan: !1, scanRoots: [] };
+    let minimal = [];
+    for (let el2 of filtered) {
+      let subsumedBy = -1;
+      for (let i = 0; i < minimal.length; i++) {
+        if (minimal[i].contains(el2)) {
+          subsumedBy = i;
+          break;
+        }
+        if (el2.contains(minimal[i])) {
+          minimal[i] = el2, subsumedBy = i;
+          break;
+        }
+      }
+      subsumedBy === -1 && minimal.push(el2);
+    }
+    return { fullScan: !1, scanRoots: minimal };
+  }
   function start(opts = {}) {
     if (stop(), autoPaused = !1, lastPauseAt = 0, recentTriggers = [], isSettled = !1, mutationsThisWindow = 0, visibilityGet = opts.visibilityGet || (() => !0), queryGet = opts.queryGet || (() => ""), liveGet = opts.liveGet || (() => !0), !safe.MutationObserver) {
       log.warn("MutationObserver unavailable");
       return;
     }
     let Mo = safe.MutationObserver;
-    observer = new Mo(() => {
+    observer = new Mo((records) => {
+      if (records && records.length)
+        for (let r of records) pendingRecords.push(r);
       mutationsThisWindow++, isSettled && (isSettled = !1, emit("dom-unsettled")), fireMutate();
     }), rebind(), settleTimer = safe.setInterval(() => {
       mutationsThisWindow < SETTLE_THRESHOLD ? isSettled || (isSettled = !0, emit("dom-settled")) : isSettled = !1, mutationsThisWindow = 0;
@@ -1601,7 +1653,7 @@ Different from Append \u2014 Append stores values; Log stores history of finds.`
   }
 
   // src/highlight.js
-  var ALL_NAME = "ss-all", ACTIVE_NAME = "ss-active", allHL = null, activeHL = null, installed = !1, styleElRef = null;
+  var ALL_NAME = "ss-all", ACTIVE_NAME = "ss-active", allHL = null, activeHL = null, installed = !1, styleElRef = null, currentRanges = /* @__PURE__ */ new Set(), currentActiveRange = null;
   function isAvailable() {
     return !!(safe.cssHighlights && safe.Highlight);
   }
@@ -1626,30 +1678,28 @@ Different from Append \u2014 Append stores values; Log stores history of finds.`
     ::highlight(${ACTIVE_NAME}) { background-color: #32CD32; color: #000; }
   `, (document.head || document.documentElement).appendChild(style), styleElRef = style;
   }
-  function setMatches(matches, activeIndex) {
-    if (install(), !!isAvailable() && !(!allHL || !activeHL)) {
-      allHL.clear(), activeHL.clear();
-      for (let i = 0; i < matches.length; i++) {
-        let m = matches[i];
-        if (!(!m || !m.range))
-          try {
-            i === activeIndex ? activeHL.add(m.range) : allHL.add(m.range);
-          } catch {
-          }
-      }
+  function syncMatches(matches, activeIndex) {
+    if (install(), !isAvailable() || !allHL || !activeHL) return;
+    let list = Array.isArray(matches) ? matches : [], newRanges = [], newSet = /* @__PURE__ */ new Set();
+    for (let m of list)
+      m && m.range && (newRanges.push(m.range), newSet.add(m.range));
+    let targetActive = activeIndex >= 0 && list[activeIndex] ? list[activeIndex].range : null;
+    for (let r of [...currentRanges])
+      newSet.has(r) || (tryDelete(allHL, r), tryDelete(activeHL, r), currentRanges.delete(r), r === currentActiveRange && (currentActiveRange = null));
+    for (let r of newRanges)
+      currentRanges.has(r) || (tryAdd(allHL, r), currentRanges.add(r));
+    targetActive !== currentActiveRange && (currentActiveRange && (tryDelete(activeHL, currentActiveRange), tryAdd(allHL, currentActiveRange)), targetActive && (tryDelete(allHL, targetActive), tryAdd(activeHL, targetActive)), currentActiveRange = targetActive);
+  }
+  function tryAdd(hl, range) {
+    try {
+      hl.add(range);
+    } catch {
     }
   }
-  function setActiveOnly(matches, activeIndex) {
-    if (install(), !(!isAvailable() || !allHL || !activeHL)) {
-      activeHL.clear(), allHL.clear();
-      for (let i = 0; i < matches.length; i++) {
-        let m = matches[i];
-        if (!(!m || !m.range))
-          try {
-            i === activeIndex ? activeHL.add(m.range) : allHL.add(m.range);
-          } catch {
-          }
-      }
+  function tryDelete(hl, range) {
+    try {
+      hl.delete(range);
+    } catch {
     }
   }
 
@@ -1980,7 +2030,13 @@ Log dedupes by (value, before, after, url) within a session so live-mode typing 
     let unsubs = [], controls = build2(), inputBuilt = build(state_exports), list = build3(), logRegion = build4(), helpModal = build5();
     root2.appendChild(controls), root2.appendChild(inputBuilt.row), root2.appendChild(inputBuilt.summary), root2.appendChild(list), root2.appendChild(logRegion), root2.appendChild(helpModal), installStyles(), install();
     let lastResultFingerprint = null, fingerprintMatches = (ms) => !ms || ms.length === 0 ? "empty" : ms.map((m) => m.id || m.value + "|" + m.before + "|" + m.after).join(","), performSearch = (auto = !1) => {
-      let s = get(), result = dispatch({ query: s.query, mode: s.mode, root: document.body, sourceUrl: location.href }), allowedPersist = isAllowedToPersist(s, location.href), patch = {
+      let s = get(), result = dispatch({ query: s.query, mode: s.mode, root: document.body, sourceUrl: location.href }), fp = fingerprintMatches(result.matches), sameAsLast = auto && fp === lastResultFingerprint;
+      if (lastResultFingerprint = fp, sameAsLast) {
+        let idx = s.activeIndex < result.matches.length ? s.activeIndex : 0;
+        set({ matches: result.matches, activeIndex: idx });
+        return;
+      }
+      let allowedPersist = isAllowedToPersist(s, location.href), patch = {
         matches: result.matches,
         activeIndex: 0,
         inputError: result.error,
@@ -1988,25 +2044,52 @@ Log dedupes by (value, before, after, url) within a session so live-mode typing 
         truncated: !!result.truncated,
         jsErrorMessage: result.jsErrorMessage || null
       };
-      result.lastJsResult !== void 0 && (patch.lastJsResult = result.lastJsResult, patch.lastJsResultPresent = !0), s.append && allowedPersist && (patch.historical = mergeHistoricalLocal(s.historical, result.matches));
-      let fp = fingerprintMatches(result.matches), sameAsLast = auto && fp === lastResultFingerprint;
-      if (lastResultFingerprint = fp, s.log?.enabled && allowedPersist && !sameAsLast) {
+      if (result.lastJsResult !== void 0 && (patch.lastJsResult = result.lastJsResult, patch.lastJsResultPresent = !0), s.append && allowedPersist && (patch.historical = mergeHistoricalLocal(s.historical, result.matches)), s.log?.enabled && allowedPersist) {
         let entries2 = logMatches(result.matches);
         if (entries2.length && (patch.logEntries = [...s.logEntries || [], ...entries2].slice(-1e3), s.log.con && typeof console < "u"))
           for (let e of entries2) console.log("[super-search]", e);
       }
-      batch(() => set(patch)), setMatches(result.matches, 0), applyOutlines(result.matches, 0);
+      batch(() => set(patch)), syncMatches(result.matches, 0), applyOutlines(result.matches, 0);
     }, liveSearch = debounce(100, () => performSearch(!0)), maybeLive = () => {
       let s = get();
       s.live && s.mode !== "js" && s.query && liveSearch();
     }, navigateTo = (idx) => {
       let s = get();
-      s.matches.length !== 0 && (set({ activeIndex: idx }), setActiveOnly(s.matches, idx), applyOutlines(s.matches, idx), scrollToMatch(s.matches[idx]));
+      s.matches.length !== 0 && (set({ activeIndex: idx }), syncMatches(s.matches, idx), applyOutlines(s.matches, idx), scrollToMatch(s.matches[idx]));
+    }, performIncrementalSearch = (scanRoots) => {
+      let s = get(), old = s.matches || [], inDirty = (m) => {
+        let node = m.range && m.range.startContainer || m.element;
+        if (!node) return !1;
+        for (let r of scanRoots)
+          if (r.contains(node)) return !0;
+        return !1;
+      }, survivors = old.filter((m) => isAlive(m) && !inDirty(m)), fresh = [];
+      for (let r of scanRoots) {
+        let sub = dispatch({ query: s.query, mode: s.mode, root: r, sourceUrl: location.href });
+        sub && Array.isArray(sub.matches) && fresh.push(...sub.matches);
+      }
+      let merged = [...survivors, ...fresh], prevActive = old[s.activeIndex], newActiveIndex = 0;
+      if (prevActive) {
+        let idx = merged.findIndex((m) => m.id === prevActive.id);
+        idx !== -1 && (newActiveIndex = idx);
+      }
+      let addedToLog = fresh.filter((m) => !old.some((o) => o.id === m.id)), allowedPersist = isAllowedToPersist(s, location.href), patch = {
+        matches: merged,
+        activeIndex: newActiveIndex,
+        inputError: null,
+        truncated: !1
+      };
+      if (s.append && allowedPersist && addedToLog.length && (patch.historical = mergeHistoricalLocal(s.historical, addedToLog)), s.log?.enabled && allowedPersist && addedToLog.length) {
+        let entries2 = logMatches(addedToLog);
+        if (entries2.length && (patch.logEntries = [...s.logEntries || [], ...entries2].slice(-1e3), s.log.con && typeof console < "u"))
+          for (let e of entries2) console.log("[super-search]", e);
+      }
+      batch(() => set(patch)), syncMatches(merged, newActiveIndex), applyOutlines(merged, newActiveIndex), lastResultFingerprint = fingerprintMatches(merged);
     };
     setListeners({
       onInput(v) {
         let next = { query: v };
-        v || (next.matches = [], next.activeIndex = 0, next.inputError = null, next.truncated = !1, setMatches([], 0), restore()), set(next), maybeLive();
+        v || (next.matches = [], next.activeIndex = 0, next.inputError = null, next.truncated = !1, syncMatches([], 0), restore()), set(next), maybeLive();
       },
       onSubmit() {
         let s = get();
@@ -2064,7 +2147,7 @@ Log dedupes by (value, before, after, url) within a session so live-mode typing 
           flushPersist?.();
         } catch {
         }
-        setMatches([], 0), restore();
+        syncMatches([], 0), restore();
       },
       onDump() {
         let s = get();
@@ -2101,15 +2184,16 @@ Log dedupes by (value, before, after, url) within a session so live-mode typing 
       if (live.length !== s.matches.length) {
         lastPrunedRef = live;
         let newIdx = adjustIndex(s.activeIndex, s.matches.length, live.length);
-        set({ matches: live, activeIndex: newIdx }), setMatches(live, newIdx);
+        set({ matches: live, activeIndex: newIdx }), syncMatches(live, newIdx);
       } else
         lastPrunedRef = s.matches;
     });
-    return unsubs.push(unsub2), set({}), unsubs.push(on("dom-changed", () => {
+    return unsubs.push(unsub2), set({}), unsubs.push(on("dom-changed", (payload) => {
       let s = get();
-      s.query && s.mode !== "js" && (s.live || s.append) && performSearch(!0);
+      if (!s.query || s.mode === "js" || !(s.live || s.append)) return;
+      !payload || payload.fullScan || !payload.scanRoots || payload.scanRoots.length === 0 || s.mode === "selector" ? performSearch(!0) : performIncrementalSearch(payload.scanRoots);
     })), unsubs.push(on("nav", () => {
-      rebind(), setMatches([], 0), restore(), set({ matches: [], activeIndex: 0 }), get().live && get().query && get().mode !== "js" && performSearch(!0);
+      rebind(), syncMatches([], 0), restore(), set({ matches: [], activeIndex: 0 }), get().live && get().query && get().mode !== "js" && performSearch(!0);
     })), unsubs.push(on("pagehide", () => {
       flushPersist?.();
     })), unsubs.push(on("dom-unsettled", () => set({ domSettled: !1 }))), unsubs.push(on("dom-settled", () => {

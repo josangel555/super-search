@@ -2,6 +2,11 @@ import { describe, it, expect } from 'bun:test';
 
 describe('boot smoke', () => {
   it('main.js mounts a panel inside a shadow root on documentElement', async () => {
+    // Clean up any panel + state left by prior test files (bun runs them in
+    // one process and modules are cached).
+    for (const n of document.documentElement.querySelectorAll('div[id^="ss-"]')) n.remove();
+    const state = await import('../../src/state.js');
+    state.reset();
     const { __resetSentinel } = await import('../../src/sentinel.js');
     __resetSentinel();
     await import('../../src/main.js');

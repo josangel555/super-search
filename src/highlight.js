@@ -1,5 +1,7 @@
-// CSS.highlights wrapper. Feature-detected so older browsers degrade
-// gracefully (no text highlight — navigation still works).
+// CSS.highlights wrapper with incremental delta updates.
+// Tracks current state internally so syncMatches() only touches Range objects
+// that actually changed — eliminates the clear-then-rebuild flicker on
+// observer-driven re-runs.
 import { safe } from './safe.js';
 
 const ALL_NAME = 'ss-all';
@@ -8,7 +10,16 @@ const ACTIVE_NAME = 'ss-active';
 let allHL = null;
 let activeHL = null;
 let installed = false;
-let styleElRef = null;     // closure-held reference; we don't rely on getElementById
+let styleElRef = null;
+
+// Set of Range objects currently registered with CSS.highlights. Keyed by
+// Range identity (not match.id) because two matches with identical content
+// at different DOM positions are legitimately separate highlight rows and
+// must be tracked individually. Range identity also makes survivors free:
+// re-searches that produce fresh Range objects for the SAME content are
+// caught by performSearch's fingerprint short-circuit before they reach us.
+const currentRanges = new Set();
+let currentActiveRange = null;
 
 export function isAvailable() {
   return !!(safe.cssHighlights && safe.Highlight);
@@ -29,16 +40,9 @@ export function install() {
 }
 
 export function installStyles() {
-  // Highlights are styled at the document level (CSS pseudo-element selector
-  // can't be scoped to a shadow root). Append a <style> to documentElement.
-  // We retain a closure reference rather than relying on a known-id element,
-  // so host pages can't probe for us via getElementById.
   if (typeof document === 'undefined') return;
   if (styleElRef && styleElRef.isConnected) return;
   const style = document.createElement('style');
-  // Background colours chosen to pass WCAG AA (>= 4.5:1) against black text:
-  // - all matches: #C04AC0 (medium orchid) ≈ 5.1:1
-  // - active match: #32CD32 (lime green) ≈ 9.0:1
   style.textContent = `
     ::highlight(${ALL_NAME})    { background-color: #C04AC0; color: #000; }
     ::highlight(${ACTIVE_NAME}) { background-color: #32CD32; color: #000; }
@@ -50,39 +54,66 @@ export function installStyles() {
 export function clear() {
   if (allHL) allHL.clear();
   if (activeHL) activeHL.clear();
+  currentRanges.clear();
+  currentActiveRange = null;
 }
 
-export function setMatches(matches, activeIndex) {
-  install();
-  if (!isAvailable()) return;
-  if (!allHL || !activeHL) return;
-  allHL.clear();
-  activeHL.clear();
-  for (let i = 0; i < matches.length; i++) {
-    const m = matches[i];
-    if (!m || !m.range) continue;
-    try {
-      if (i === activeIndex) activeHL.add(m.range);
-      else allHL.add(m.range);
-    } catch { /* range may be detached */ }
-  }
-}
-
-// Move only the "active" range without rebuilding the full set.
-// Used by next/prev navigation — much cheaper than setMatches for big sets.
-export function setActiveOnly(matches, activeIndex) {
+// Wholesale set the highlights to mirror `matches` with `activeIndex` active.
+// Touches only Range objects that changed since the previous call.
+// Re-searches that produce identical content but fresh Range objects are
+// short-circuited upstream in performSearch via the fingerprint check —
+// so by the time we get here, fresh Ranges always mean genuinely new matches.
+export function syncMatches(matches, activeIndex) {
   install();
   if (!isAvailable() || !allHL || !activeHL) return;
-  // Move the previous active back into all, swap in the new active.
-  activeHL.clear();
-  // Re-derive: this is O(matches) but only touches the Highlight set, no Range allocations.
-  allHL.clear();
-  for (let i = 0; i < matches.length; i++) {
-    const m = matches[i];
-    if (!m || !m.range) continue;
-    try {
-      if (i === activeIndex) activeHL.add(m.range);
-      else allHL.add(m.range);
-    } catch { /* detached */ }
+  const list = Array.isArray(matches) ? matches : [];
+  const newRanges = [];
+  const newSet = new Set();
+  for (const m of list) {
+    if (m && m.range) {
+      newRanges.push(m.range);
+      newSet.add(m.range);
+    }
+  }
+  const targetActive = (activeIndex >= 0 && list[activeIndex]) ? list[activeIndex].range : null;
+
+  // 1. Remove Ranges no longer present.
+  for (const r of [...currentRanges]) {
+    if (newSet.has(r)) continue;
+    tryDelete(allHL, r); tryDelete(activeHL, r);
+    currentRanges.delete(r);
+    if (r === currentActiveRange) currentActiveRange = null;
+  }
+
+  // 2. Add new Ranges.
+  for (const r of newRanges) {
+    if (currentRanges.has(r)) continue;
+    tryAdd(allHL, r);
+    currentRanges.add(r);
+  }
+
+  // 3. Active-range swap. Move previous active back into all-set, promote new.
+  if (targetActive !== currentActiveRange) {
+    if (currentActiveRange) {
+      tryDelete(activeHL, currentActiveRange);
+      tryAdd(allHL, currentActiveRange);
+    }
+    if (targetActive) {
+      tryDelete(allHL, targetActive);
+      tryAdd(activeHL, targetActive);
+    }
+    currentActiveRange = targetActive;
   }
 }
+
+function tryAdd(hl, range) { try { hl.add(range); } catch {} }
+function tryDelete(hl, range) { try { hl.delete(range); } catch {} }
+
+// Back-compat alias — existing callers still use setMatches.
+export const setMatches = syncMatches;
+// setActiveOnly is now just a special case of syncMatches.
+export function setActiveOnly(matches, activeIndex) { syncMatches(matches, activeIndex); }
+
+// Inspection helpers for tests / diagnostics.
+export function currentSize() { return currentRanges.size; }
+export function activeRange() { return currentActiveRange; }
